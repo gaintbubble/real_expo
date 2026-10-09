@@ -208,42 +208,79 @@ export default function Dashboard() {
     const currentInput = barcodeInput.trim();
     if (!currentInput) return;
     
-    setIsScanning(true);
+    // Clear input immediately for next scan instantly
+    setBarcodeInput('');
     
-    const response = await saveBarcodeToDatabase(currentInput, activeTab);
+    // Optimistic UI update
+    const tempId = 'temp-' + Date.now() + '-' + Math.random().toString(36).substring(7);
+    const optimisticSample: Sample = {
+      id: tempId,
+      barcode: currentInput,
+      patient: 'Loading...',
+      test: 'Loading...',
+      serviceCd: '--',
+      status: 'Saving...',
+      entryDate: '--',
+      entryTime: '--',
+      receivedDate: '--',
+      receivedTime: '--',
+      resultDate: '--',
+      resultTime: '--',
+      target: '--',
+      delayPercent: 0,
+      departments: [],
+      isOverdue: false,
+      isOverdueAfterExtraTime: false,
+    };
     
-    if (response.success && response.sample) {
-      const newSample: Sample = {
-        id: response.sample.id,
-        barcode: response.sample.barcode,
-        patient: response.sample.patientName || '--',
-        test: ('displayTestName' in response.sample ? (response.sample as { displayTestName?: string }).displayTestName : undefined) || response.sample.testName || 'Waiting...',
-        serviceCd: response.sample.serviceCd || '--',
-        status: response.sample.currentStatus || 'Pending LIS Search',
-        entryDate: response.sample.createdAt ? new Date(response.sample.createdAt).toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' }) : '--',
-        entryTime: response.sample.createdAt ? new Date(response.sample.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : '--',
-        receivedDate: response.sample.receivedTime ? new Date(response.sample.receivedTime).toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' }) : '--',
-        receivedTime: response.sample.receivedTime ? new Date(response.sample.receivedTime).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : '--',
-        resultDate: response.sample.resultTime ? new Date(response.sample.resultTime).toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' }) : '--',
-        resultTime: response.sample.resultTime ? new Date(response.sample.resultTime).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : '--',
-        target: '--',
-        delayPercent: 0,
-        departments: ('departments' in response.sample) ? (response.sample as any).departments : [],
-        isOverdue: false,
-        isOverdueAfterExtraTime: false,
-      };
-      setSamples((prev) => [newSample, ...prev]);
-      setBarcodeInput('');
-    } else {
-      alert(response.message || "Failed to save barcode.");
-    }
+    setSamples((prev) => [optimisticSample, ...prev]);
     
-    setIsScanning(false);
+    // Focus back immediately just in case
     setTimeout(() => {
       if (inputRef.current) {
         inputRef.current.focus();
       }
     }, 10);
+    
+    setIsScanning(true);
+    
+    try {
+      const response = await saveBarcodeToDatabase(currentInput, activeTab);
+      
+      if (response.success && response.sample) {
+        const newSample: Sample = {
+          id: response.sample.id,
+          barcode: response.sample.barcode,
+          patient: response.sample.patientName || '--',
+          test: ('displayTestName' in response.sample ? (response.sample as { displayTestName?: string }).displayTestName : undefined) || response.sample.testName || 'Waiting...',
+          serviceCd: response.sample.serviceCd || '--',
+          status: response.sample.currentStatus || 'Pending LIS Search',
+          entryDate: response.sample.createdAt ? new Date(response.sample.createdAt).toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' }) : '--',
+          entryTime: response.sample.createdAt ? new Date(response.sample.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : '--',
+          receivedDate: response.sample.receivedTime ? new Date(response.sample.receivedTime).toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' }) : '--',
+          receivedTime: response.sample.receivedTime ? new Date(response.sample.receivedTime).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : '--',
+          resultDate: response.sample.resultTime ? new Date(response.sample.resultTime).toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' }) : '--',
+          resultTime: response.sample.resultTime ? new Date(response.sample.resultTime).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : '--',
+          target: '--',
+          delayPercent: 0,
+          departments: ('departments' in response.sample) ? (response.sample as any).departments : [],
+          isOverdue: false,
+          isOverdueAfterExtraTime: false,
+        };
+        
+        setSamples((prev) => prev.map(s => s.id === tempId ? newSample : s));
+      } else {
+        // Revert optimistic update on failure
+        setSamples((prev) => prev.filter(s => s.id !== tempId));
+        alert(response.message || "Failed to save barcode.");
+      }
+    } catch (error) {
+      setSamples((prev) => prev.filter(s => s.id !== tempId));
+      console.error(error);
+      alert("Error saving barcode.");
+    } finally {
+      setIsScanning(false);
+    }
   };
 
   useEffect(() => {
@@ -570,7 +607,6 @@ export default function Dashboard() {
                     className="search-input"
                     value={barcodeInput}
                     onChange={(e) => setBarcodeInput(e.target.value)}
-                    disabled={isScanning}
                     style={{ fontSize: '0.75rem' }}
                   />
                 </form>
