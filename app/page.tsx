@@ -218,6 +218,7 @@ export default function Dashboard() {
     
     // Optimistic UI update
     const tempId = 'temp-' + Date.now() + '-' + Math.random().toString(36).substring(7);
+    const now = new Date();
     const optimisticSample: Sample = {
       id: tempId,
       barcode: currentInput,
@@ -225,15 +226,15 @@ export default function Dashboard() {
       test: 'Loading...',
       serviceCd: '--',
       status: 'Saving...',
-      entryDate: '--',
-      entryTime: '--',
+      entryDate: now.toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' }),
+      entryTime: now.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
       receivedDate: '--',
       receivedTime: '--',
       resultDate: '--',
       resultTime: '--',
       target: '--',
       delayPercent: 0,
-      departments: [],
+      departments: activeTab ? [activeTab] : [],
       isOverdue: false,
       isOverdueAfterExtraTime: false,
     };
