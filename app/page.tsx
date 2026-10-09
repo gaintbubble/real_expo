@@ -274,7 +274,7 @@ export default function Dashboard() {
           resultTime: response.sample.resultTime ? new Date(response.sample.resultTime).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : '--',
           target: '--',
           delayPercent: 0,
-          departments: ('departments' in response.sample) ? (response.sample as any).departments : [],
+          departments: ('departments' in response.sample && (response.sample as any).departments.length > 0) ? (response.sample as any).departments : (activeTab ? [activeTab] : []),
           isOverdue: false,
           isOverdueAfterExtraTime: false,
         };
