@@ -42,10 +42,26 @@ export async function saveBarcodeToDatabase(barcode: string, activeTab?: string)
   }
 }
 
-export async function getAllTrackedSamples() {
+export async function getAllTrackedSamples(dateStr?: string) {
   try {
+    let whereClause = {};
+    if (dateStr && dateStr !== '--') {
+      const [year, month, day] = dateStr.split('-').map(Number);
+      const startOfDay = new Date(year, month - 1, day, 0, 0, 0);
+      const endOfDay = new Date(year, month - 1, day, 23, 59, 59, 999);
+      whereClause = {
+        OR: [
+          { createdAt: { gte: startOfDay, lte: endOfDay } },
+          { receivedTime: { gte: startOfDay, lte: endOfDay } },
+          { resultTime: { gte: startOfDay, lte: endOfDay } }
+        ]
+      };
+    }
+
     const samples = await prisma.trackedSample.findMany({
-      orderBy: { createdAt: 'desc' }
+      where: whereClause,
+      orderBy: { createdAt: 'desc' },
+      take: dateStr ? undefined : 1000
     });
     
     const departmentsList = await prisma.department.findMany();

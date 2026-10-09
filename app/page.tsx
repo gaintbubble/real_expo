@@ -114,7 +114,7 @@ export default function Dashboard() {
   useEffect(() => {
     const loadRealData = async () => {
       try {
-        const dbSamples = await getAllTrackedSamples();
+        const dbSamples = await getAllTrackedSamples(selectedDate);
         if (!Array.isArray(dbSamples)) return;
         
         const formattedSamples: Sample[] = dbSamples.map((s: any) => {
@@ -206,7 +206,7 @@ export default function Dashboard() {
     
     // Cleanup interval on unmount
     return () => clearInterval(intervalId);
-  }, []);
+  }, [selectedDate]);
 
   const handleScan = async (e: React.FormEvent) => {
     e.preventDefault();
