@@ -1,4 +1,4 @@
-const API_URL = "http://localhost:3000/api/extension";
+const API_URL = "https://real-expo-f5atwaxcb-lalith93.vercel.app/api/extension";
 
 console.log("🚀 Background Scraper Started!");
 
@@ -47,7 +47,7 @@ setInterval(() => {
 
     } catch (error) {
       // ESLint Fix: The error variable is now printed to the console
-      console.log("🔌 Cannot connect to Dashboard (Is localhost:3000 running?)", error);
+      console.log("🔌 Cannot connect to Dashboard (Is the Vercel app reachable?)", error);
     }
   });
 }, 10000);

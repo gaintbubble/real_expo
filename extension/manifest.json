@@ -9,7 +9,7 @@
     "scripting"
   ],
   "host_permissions": [
-    "http://localhost:3000/*", 
+    "https://real-expo-f5atwaxcb-lalith93.vercel.app/*", 
     "https://*/*"
   ],
   "background": {
