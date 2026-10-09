@@ -250,7 +250,12 @@ export default function Dashboard() {
     setIsScanning(true);
     
     try {
-      const response = await saveBarcodeToDatabase(currentInput, activeTab);
+      const res = await fetch('/api/save-barcode', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ barcode: currentInput, activeTab })
+      });
+      const response = await res.json();
       
       if (response.success && response.sample) {
         const newSample: Sample = {
