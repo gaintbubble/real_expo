@@ -1,0 +1,24 @@
+{
+  "manifest_version": 3,
+  "name": "LIS TAT Tracker Auto-Scraper",
+  "version": "1.0",
+  "description": "Automatically searches barcodes in the LIS and updates the TAT dashboard.",
+  "permissions": [
+    "storage",
+    "activeTab",
+    "scripting"
+  ],
+  "host_permissions": [
+    "http://localhost:3000/*", 
+    "https://*/*"
+  ],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "content_scripts": [
+    {
+      "matches": ["<all_urls>"], 
+      "js": ["content.js"]
+    }
+  ]
+}

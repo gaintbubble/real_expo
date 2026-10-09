@@ -1,0 +1,84 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider  = "postgresql"
+  url       = env("DATABASE_URL")
+  directUrl = env("DIRECT_URL")
+}
+// 1. Stores our expected TAT for each test (e.g., CBC = 30 mins)
+model TatMaster {
+  id              String   @id @default(uuid())
+  testName        String   @unique
+  targetTatMins   Int
+  createdAt       DateTime @default(now())
+}
+
+// 2. Stores the actual barcodes we are tracking
+model TrackedSample {
+  id              String   @id @default(uuid())
+  barcode         String   @unique
+  patientName     String?  // The ? means this is optional
+  testName        String
+  testDetails     String?
+  serviceCd       String?
+  currentStatus   String
+  receivedTime    DateTime?
+  resultTime      DateTime?
+  expectedEndTime DateTime?
+  nextCheckTime   DateTime?
+  isCompleted     Boolean  @default(false)
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+  
+  // This connects the sample to its status history
+  history         StatusHistory[]
+}
+
+// 3. Stores every status change so we can see the progress
+model StatusHistory {
+  id              String   @id @default(uuid())
+  status          String
+  timestamp       DateTime @default(now())
+  
+  // Connects back to the specific sample
+  sampleId        String
+  sample          TrackedSample @relation(fields: [sampleId], references: [id])
+}
+
+model Department {
+  id          String   @id @default(uuid())
+  name        String   @unique
+  triggerTime Int?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  tests       TestConfig[]
+}
+
+model TestConfig {
+  id                    String   @id @default(uuid())
+  testName              String   @unique
+  serviceCd             String?
+  shortName             String?
+  departmentId          String
+  department            Department @relation(fields: [departmentId], references: [id])
+  intervalTime          Int      // Time in minutes for receiving to result done
+  intervalTimeVerified  Int?     // Time in minutes for verified
+  createdAt             DateTime @default(now())
+  updatedAt             DateTime @updatedAt
+}
+
+model User {
+  id          String   @id @default(uuid())
+  username    String   @unique
+  password    String   @default("asram")
+  name        String
+  mobileNo    String?
+  departments String[]
+  modules     String[]
+  defaultDept String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+}
