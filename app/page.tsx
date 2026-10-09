@@ -183,7 +183,12 @@ export default function Dashboard() {
             isVerificationOverdue
           };
         });
-        setSamples(formattedSamples);
+        setSamples((prev) => {
+          const tempSamples = prev.filter(s => s.id.startsWith('temp-'));
+          const tempBarcodes = new Set(tempSamples.map(s => s.barcode));
+          const filteredFormatted = formattedSamples.filter(f => !tempBarcodes.has(f.barcode));
+          return [...tempSamples, ...filteredFormatted];
+        });
       } catch (error) {
         console.warn("Polling error (Server might be restarting):", error);
       }
