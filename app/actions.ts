@@ -16,12 +16,7 @@ export async function saveBarcodeToDatabase(barcode: string, activeTab?: string)
     let serviceCd = undefined;
     
     if (activeTab) {
-      const dept = await prisma.department.findUnique({
-        where: { name: activeTab }
-      });
-      if (dept) {
-        serviceCd = `DEPT:${dept.name}`;
-      }
+      serviceCd = `DEPT:${activeTab}`;
     }
 
     const sample = await prisma.trackedSample.create({
