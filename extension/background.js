@@ -1,4 +1,4 @@
-const API_URL = "https://real-expo-f5atwaxcb-lalith93.vercel.app/api/extension";
+const API_URL = "https://real-expo.vercel.app/api/extension";
 
 console.log("🚀 Background Scraper Started!");
 

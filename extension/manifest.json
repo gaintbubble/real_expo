@@ -9,7 +9,7 @@
     "scripting"
   ],
   "host_permissions": [
-    "https://real-expo-f5atwaxcb-lalith93.vercel.app/*", 
+    "https://real-expo.vercel.app/*", 
     "https://*/*"
   ],
   "background": {
