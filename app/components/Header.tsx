@@ -16,10 +16,13 @@ import {
   LogOut 
 } from 'lucide-react';
 import { changePassword } from '../actions/auth';
-import { useRouter } from 'next/navigation';
+import { useRouter, usePathname } from 'next/navigation';
+import { useSearch } from '../context/SearchContext';
 
 export default function Header() {
   const router = useRouter();
+  const pathname = usePathname();
+  const { searchQuery, setSearchQuery, clearSearch } = useSearch();
   const [userName, setUserName] = useState('Guest');
   const [userRole, setUserRole] = useState('Loading...');
   const [currentUser, setCurrentUser] = useState<any>(null);
@@ -142,13 +145,41 @@ export default function Header() {
   return (
     <>
       <header className="top-header">
-        <div className="header-search">
+        <div className="header-search" style={{ position: 'relative', display: 'flex', alignItems: 'center' }}>
           <Search size={18} className="search-icon" />
           <input 
             type="text" 
-            placeholder="Search samples, patients, or barcodes..." 
+            placeholder="Search samples, patients, barcodes, or status..." 
             className="search-input"
+            value={searchQuery}
+            onChange={(e) => {
+              setSearchQuery(e.target.value);
+              if (pathname !== '/') {
+                router.push('/');
+              }
+            }}
           />
+          {searchQuery && (
+            <button
+              type="button"
+              onClick={clearSearch}
+              style={{
+                background: 'transparent',
+                border: 'none',
+                color: 'var(--text-secondary)',
+                cursor: 'pointer',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                padding: '2px',
+                marginLeft: '4px',
+                borderRadius: '50%'
+              }}
+              title="Clear search"
+            >
+              <X size={15} />
+            </button>
+          )}
         </div>
         
         <div className="header-actions">

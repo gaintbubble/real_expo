@@ -4,7 +4,8 @@ import React, { useState, useRef, useEffect } from 'react';
 import { saveBarcodeToDatabase, getAllTrackedSamples, clearAllSamples, deleteSample, updateSampleBarcode, markSampleReceived, extendSampleTime, simulateFalseTrigger } from './actions';
 import { getDepartments } from './actions/departments';
 import { DatePicker } from './components/DatePicker';
-import { Edit2, Trash2, Barcode, CheckCircle, Volume2, VolumeX } from 'lucide-react';
+import { Edit2, Trash2, Barcode, CheckCircle, Volume2, VolumeX, X as XIcon } from 'lucide-react';
+import { useSearch } from './context/SearchContext';
 
 interface Sample {
   id: string;
@@ -33,7 +34,7 @@ interface Sample {
 export default function Dashboard() {
   const [samples, setSamples] = useState<Sample[]>([]);
   const [barcodeInput, setBarcodeInput] = useState('');
-  const [searchQuery, setSearchQuery] = useState('');
+  const { searchQuery, clearSearch } = useSearch();
   const [statusFilter, setStatusFilter] = useState<string>('all');
   const [selectedDate, setSelectedDate] = useState<string>(() => {
     const d = new Date();
@@ -625,20 +626,6 @@ export default function Dashboard() {
                   />
                 </form>
 
-                <div className="header-search" style={{ width: '180px', padding: '0.25rem 0.5rem', margin: 0 }}>
-                  <svg className="search-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ marginRight: '6px' }}>
-                    <circle cx="11" cy="11" r="8"></circle>
-                    <line x1="21" y1="21" x2="16.65" y2="16.65"></line>
-                  </svg>
-                  <input 
-                    type="text"
-                    placeholder="Search samples..."
-                    className="search-input"
-                    value={searchQuery}
-                    onChange={(e) => setSearchQuery(e.target.value)}
-                    style={{ fontSize: '0.75rem' }}
-                  />
-                </div>
                 <DatePicker 
                   value={selectedDate}
                   onChange={setSelectedDate} 
@@ -664,6 +651,31 @@ export default function Dashboard() {
                 </select>
                 <span style={{ color: 'var(--text-secondary)', fontSize: '0.8rem', display: 'flex', alignItems: 'center', gap: '10px' }}>
                   <span>{filteredSamples.length} {filteredSamples.length !== samples.length ? `(of ${samples.length})` : ''} tracked</span>
+                  {searchQuery && (
+                    <span 
+                      style={{ 
+                        display: 'inline-flex', 
+                        alignItems: 'center', 
+                        gap: '4px', 
+                        padding: '2px 8px', 
+                        borderRadius: '12px', 
+                        background: 'rgba(59, 130, 246, 0.15)', 
+                        color: 'var(--accent-primary)', 
+                        fontSize: '0.72rem',
+                        fontWeight: 600
+                      }}
+                      title="Active search filter from header"
+                    >
+                      <span>Filtered: "{searchQuery}"</span>
+                      <button 
+                        onClick={clearSearch} 
+                        style={{ background: 'transparent', border: 'none', color: 'inherit', cursor: 'pointer', display: 'flex', alignItems: 'center', padding: 0 }}
+                        title="Clear search"
+                      >
+                        <XIcon size={11} />
+                      </button>
+                    </span>
+                  )}
                   <button 
                     onClick={() => setIsMuted(!isMuted)}
                     style={{ 
