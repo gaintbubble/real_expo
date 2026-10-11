@@ -15,7 +15,7 @@ export async function verifyUser(username: string, password: string) {
           username: 'admin',
           password: 'admin',
           name: 'Super Admin',
-          modules: ['Dashboard', 'Samples', 'Patients', 'Departments', 'Test Config', 'Users', 'Settings'],
+          modules: ['Dashboard', 'Departments', 'Test Config', 'Users', 'Settings'],
           departments: []
         }
       });

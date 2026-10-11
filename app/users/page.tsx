@@ -21,8 +21,6 @@ interface User {
 
 const AVAILABLE_MODULES = [
   'Dashboard',
-  'Samples',
-  'Patients',
   'Departments',
   'Test Config',
   'Users',

@@ -5,8 +5,6 @@ import Link from 'next/link';
 import { usePathname, useRouter } from 'next/navigation';
 import { 
   LayoutDashboard, 
-  TestTube2, 
-  Users, 
   Settings, 
   LogOut,
   ChevronLeft,
@@ -38,8 +36,6 @@ export default function Sidebar() {
 
   const allNavItems = [
     { name: 'Dashboard', href: '/', icon: <LayoutDashboard size={20} /> },
-    { name: 'Samples', href: '/samples', icon: <TestTube2 size={20} /> },
-    { name: 'Patients', href: '/patients', icon: <Users size={20} /> },
     { name: 'Departments', href: '/departments', icon: <Building2 size={20} /> },
     { name: 'Test Config', href: '/test-config', icon: <ClipboardList size={20} /> },
     { name: 'Users', href: '/users', icon: <UserCog size={20} /> },
