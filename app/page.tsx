@@ -40,7 +40,7 @@ export default function Dashboard() {
     return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
   });
   const [isScanning, setIsScanning] = useState(false);
-  const [isMuted, setIsMuted] = useState(true);
+  const [isMuted, setIsMuted] = useState(false); // Default Alarm ON on login
   const [deleteModal, setDeleteModal] = useState<string | null>(null);
   const [receiveModal, setReceiveModal] = useState<string | null>(null);
   const [editModal, setEditModal] = useState<{ id: string, barcode: string } | null>(null);
@@ -344,6 +344,9 @@ export default function Dashboard() {
       if (!AudioContext) return;
       
       const ctx = new AudioContext();
+      if (ctx.state === 'suspended') {
+        ctx.resume();
+      }
       const osc = ctx.createOscillator();
       const gainNode = ctx.createGain();
       
@@ -663,10 +666,23 @@ export default function Dashboard() {
                   <span>{filteredSamples.length} {filteredSamples.length !== samples.length ? `(of ${samples.length})` : ''} tracked</span>
                   <button 
                     onClick={() => setIsMuted(!isMuted)}
-                    style={{ background: 'transparent', color: isMuted ? 'var(--text-secondary)' : 'var(--accent-primary)', border: '1px solid var(--border-color)', padding: '2px 6px', borderRadius: '4px', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '4px' }}
-                    title={isMuted ? "Unmute Alarm" : "Mute Alarm"}
+                    style={{ 
+                      background: isMuted ? 'transparent' : 'rgba(16, 185, 129, 0.12)', 
+                      color: isMuted ? 'var(--text-secondary)' : '#10b981', 
+                      border: `1px solid ${isMuted ? 'var(--border-color)' : '#10b981'}`, 
+                      padding: '2px 8px', 
+                      borderRadius: '4px', 
+                      cursor: 'pointer', 
+                      display: 'flex', 
+                      alignItems: 'center', 
+                      gap: '5px',
+                      fontSize: '0.75rem',
+                      fontWeight: 600
+                    }}
+                    title={isMuted ? "Alarm is currently muted. Click to turn Alarm ON." : "Alarm is currently active. Click to mute / turn Alarm OFF."}
                   >
                     {isMuted ? <VolumeX size={14} /> : <Volume2 size={14} />}
+                    <span>{isMuted ? "Alarm OFF" : "Alarm ON"}</span>
                   </button>
                   <button 
                     onClick={handleClearAll}
