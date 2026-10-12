@@ -25,13 +25,13 @@ const DEFAULT_ALARM_TRIGGERS: AlarmTriggers = {
   extendedOverdue: true,
 };
 
-const ALARM_TRIGGER_OPTIONS: { id: keyof AlarmTriggers; label: string; desc: string; color: string }[] = [
-  { id: 'collected', label: 'Sample Collected / Batch Generated', desc: 'Alert when sample is pending LIS search or batched', color: '#ef4444' },
-  { id: 'triggerOverdue', label: 'Trigger Time Overdue', desc: 'Alert when department collection trigger is exceeded', color: '#f59e0b' },
-  { id: 'resultOverdue', label: 'Result Time Overdue', desc: 'Alert when sample is received but result is delayed', color: '#f59e0b' },
-  { id: 'verificationOverdue', label: 'Verification Overdue', desc: 'Alert when result is completed but not verified', color: '#a855f7' },
-  { id: 'tatOverdue', label: 'Target TAT Overdue', desc: 'Alert when total turnaround time is breached', color: '#ef4444' },
-  { id: 'extendedOverdue', label: 'Extra Time Overdue (Critical)', desc: 'Alert when sample breaches extended grace time', color: '#dc2626' },
+const ALARM_TRIGGER_OPTIONS: { id: keyof AlarmTriggers; label: string; color: string }[] = [
+  { id: 'collected', label: 'Collected / Batch', color: '#ef4444' },
+  { id: 'triggerOverdue', label: 'Trigger Overdue', color: '#f59e0b' },
+  { id: 'resultOverdue', label: 'Result Overdue', color: '#f59e0b' },
+  { id: 'verificationOverdue', label: 'Verification Overdue', color: '#a855f7' },
+  { id: 'tatOverdue', label: 'TAT Overdue', color: '#ef4444' },
+  { id: 'extendedOverdue', label: 'Critical Overdue', color: '#dc2626' },
 ];
 
 interface Sample {
@@ -804,50 +804,49 @@ export default function Dashboard() {
                       </button>
                     </div>
 
-                    {/* Alarm Triggers Dropdown Menu */}
+                    {/* Alarm Triggers Dropdown Menu (Cute & Compact) */}
                     {isAlarmDropdownOpen && (
                       <div style={{
                         position: 'absolute',
                         top: 'calc(100% + 6px)',
                         right: 0,
-                        width: '320px',
+                        width: '220px',
                         background: 'var(--bg-secondary)',
+                        backdropFilter: 'blur(12px)',
                         border: '1px solid var(--border-color)',
-                        borderRadius: '10px',
-                        boxShadow: '0 12px 30px rgba(0, 0, 0, 0.5)',
+                        borderRadius: '12px',
+                        boxShadow: '0 10px 25px -3px rgba(0, 0, 0, 0.45)',
                         zIndex: 100,
-                        padding: '12px',
+                        padding: '10px',
                         animation: 'scaleIn 0.15s ease-out'
                       }}>
-                        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', paddingBottom: '8px', borderBottom: '1px solid var(--border-color)', marginBottom: '8px' }}>
-                          <div>
-                            <div style={{ fontWeight: 600, fontSize: '0.85rem', color: 'var(--text-primary)', display: 'flex', alignItems: 'center', gap: '6px' }}>
-                              <Bell size={14} style={{ color: 'var(--accent-primary)' }} />
-                              <span>Alarm Triggers</span>
-                            </div>
-                            <div style={{ fontSize: '0.72rem', color: 'var(--text-secondary)', marginTop: '2px' }}>
-                              Select events that sound the alarm
-                            </div>
+                        {/* Cute Mini Header */}
+                        <div style={{ 
+                          display: 'flex', 
+                          alignItems: 'center', 
+                          justifyContent: 'space-between', 
+                          paddingBottom: '6px', 
+                          borderBottom: '1px solid var(--border-color)', 
+                          marginBottom: '6px' 
+                        }}>
+                          <div style={{ display: 'flex', alignItems: 'center', gap: '5px', fontSize: '0.78rem', fontWeight: 600, color: 'var(--text-primary)' }}>
+                            <Bell size={13} style={{ color: 'var(--accent-primary)' }} />
+                            <span>Alarm Alerts</span>
                           </div>
-                          <button
-                            onClick={() => setIsMuted(!isMuted)}
-                            style={{
-                              fontSize: '0.72rem',
-                              padding: '2px 8px',
-                              borderRadius: '12px',
-                              border: `1px solid ${isMuted ? 'var(--border-color)' : '#10b981'}`,
-                              background: isMuted ? 'var(--bg-tertiary)' : 'rgba(16, 185, 129, 0.2)',
-                              color: isMuted ? 'var(--text-secondary)' : '#10b981',
-                              cursor: 'pointer',
-                              fontWeight: 600
-                            }}
-                          >
-                            {isMuted ? "Muted" : "Active"}
-                          </button>
+                          <span style={{
+                            fontSize: '0.68rem',
+                            padding: '1px 6px',
+                            borderRadius: '10px',
+                            background: isMuted ? 'rgba(255, 255, 255, 0.06)' : 'rgba(16, 185, 129, 0.15)',
+                            color: isMuted ? 'var(--text-secondary)' : '#10b981',
+                            fontWeight: 600
+                          }}>
+                            {isMuted ? "Muted" : `${Object.values(alarmTriggers).filter(Boolean).length}/6 on`}
+                          </span>
                         </div>
 
-                        {/* Trigger Checkboxes */}
-                        <div style={{ display: 'flex', flexDirection: 'column', gap: '6px', maxHeight: '280px', overflowY: 'auto' }}>
+                        {/* Trigger Checkboxes (Compact & Cute) */}
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: '2px' }}>
                           {ALARM_TRIGGER_OPTIONS.map(opt => {
                             const isChecked = alarmTriggers[opt.id];
                             return (
@@ -855,70 +854,85 @@ export default function Dashboard() {
                                 key={opt.id}
                                 style={{
                                   display: 'flex',
-                                  alignItems: 'flex-start',
-                                  gap: '8px',
-                                  padding: '6px 8px',
+                                  alignItems: 'center',
+                                  justifyContent: 'space-between',
+                                  padding: '5px 7px',
                                   borderRadius: '6px',
-                                  background: isChecked ? 'rgba(59, 130, 246, 0.05)' : 'transparent',
+                                  background: isChecked ? 'rgba(59, 130, 246, 0.06)' : 'transparent',
                                   cursor: 'pointer',
-                                  transition: 'background 0.15s'
+                                  transition: 'all 0.15s ease',
+                                  userSelect: 'none'
                                 }}
                               >
+                                <div style={{ display: 'flex', alignItems: 'center', gap: '7px' }}>
+                                  <span style={{ width: '6px', height: '6px', borderRadius: '50%', background: opt.color, flexShrink: 0 }} />
+                                  <span style={{ fontSize: '0.74rem', fontWeight: 500, color: isChecked ? 'var(--text-primary)' : 'var(--text-secondary)' }}>
+                                    {opt.label}
+                                  </span>
+                                </div>
                                 <input
                                   type="checkbox"
                                   checked={isChecked}
                                   onChange={() => toggleAlarmTrigger(opt.id)}
-                                  style={{ marginTop: '3px', cursor: 'pointer', accentColor: 'var(--accent-primary)' }}
+                                  style={{
+                                    cursor: 'pointer',
+                                    accentColor: 'var(--accent-primary)',
+                                    margin: 0,
+                                    width: '13px',
+                                    height: '13px'
+                                  }}
                                 />
-                                <div style={{ flex: 1, minWidth: 0 }}>
-                                  <div style={{ fontSize: '0.78rem', fontWeight: 600, color: 'var(--text-primary)', display: 'flex', alignItems: 'center', gap: '6px' }}>
-                                    <span style={{ width: '6px', height: '6px', borderRadius: '50%', background: opt.color, flexShrink: 0 }} />
-                                    <span>{opt.label}</span>
-                                  </div>
-                                  <div style={{ fontSize: '0.7rem', color: 'var(--text-secondary)', marginTop: '2px', lineHeight: 1.2 }}>
-                                    {opt.desc}
-                                  </div>
-                                </div>
                               </label>
                             );
                           })}
                         </div>
 
-                        {/* Footer Controls */}
-                        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', paddingTop: '10px', marginTop: '8px', borderTop: '1px solid var(--border-color)' }}>
-                          <div style={{ display: 'flex', gap: '6px' }}>
+                        {/* Cute Mini Footer */}
+                        <div style={{ 
+                          display: 'flex', 
+                          alignItems: 'center', 
+                          justifyContent: 'space-between', 
+                          paddingTop: '8px', 
+                          marginTop: '6px', 
+                          borderTop: '1px solid var(--border-color)',
+                          fontSize: '0.7rem' 
+                        }}>
+                          <div style={{ display: 'flex', gap: '6px', alignItems: 'center' }}>
                             <button
                               onClick={() => handleSetAllAlarmTriggers(true)}
-                              style={{ fontSize: '0.72rem', background: 'transparent', border: 'none', color: 'var(--accent-primary)', cursor: 'pointer', padding: 0, textDecoration: 'underline' }}
+                              style={{ background: 'transparent', border: 'none', color: 'var(--accent-primary)', cursor: 'pointer', padding: 0, fontWeight: 500, fontSize: '0.7rem' }}
                             >
-                              Select All
+                              All
                             </button>
-                            <span style={{ color: 'var(--text-secondary)', fontSize: '0.72rem' }}>|</span>
+                            <span style={{ color: 'var(--border-color)', fontSize: '0.65rem' }}>•</span>
                             <button
                               onClick={() => handleSetAllAlarmTriggers(false)}
-                              style={{ fontSize: '0.72rem', background: 'transparent', border: 'none', color: 'var(--text-secondary)', cursor: 'pointer', padding: 0, textDecoration: 'underline' }}
+                              style={{ background: 'transparent', border: 'none', color: 'var(--text-secondary)', cursor: 'pointer', padding: 0, fontSize: '0.7rem' }}
                             >
-                              Clear All
+                              None
                             </button>
                           </div>
+
                           <button
                             onClick={playAlarm}
                             style={{
-                              fontSize: '0.72rem',
-                              padding: '3px 8px',
-                              borderRadius: '4px',
+                              fontSize: '0.68rem',
+                              padding: '2px 8px',
+                              borderRadius: '12px',
                               border: '1px solid var(--border-color)',
                               background: 'var(--bg-tertiary)',
                               color: 'var(--text-primary)',
                               cursor: 'pointer',
                               display: 'flex',
                               alignItems: 'center',
-                              gap: '4px'
+                              gap: '4px',
+                              fontWeight: 500,
+                              transition: 'all 0.15s ease'
                             }}
-                            title="Play test alarm beep"
+                            title="Play test beep"
                           >
-                            <Volume2 size={12} />
-                            <span>Test Sound</span>
+                            <Volume2 size={11} />
+                            <span>Test</span>
                           </button>
                         </div>
                       </div>
