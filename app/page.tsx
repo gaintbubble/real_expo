@@ -4,8 +4,35 @@ import React, { useState, useRef, useEffect } from 'react';
 import { saveBarcodeToDatabase, getAllTrackedSamples, clearAllSamples, deleteSample, updateSampleBarcode, markSampleReceived, extendSampleTime, simulateFalseTrigger } from './actions';
 import { getDepartments } from './actions/departments';
 import { DatePicker } from './components/DatePicker';
-import { Edit2, Trash2, Barcode, CheckCircle, Volume2, VolumeX, X as XIcon } from 'lucide-react';
+import { Edit2, Trash2, Barcode, CheckCircle, Volume2, VolumeX, X as XIcon, ChevronDown, Bell } from 'lucide-react';
 import { useSearch } from './context/SearchContext';
+
+interface AlarmTriggers {
+  collected: boolean;
+  triggerOverdue: boolean;
+  resultOverdue: boolean;
+  verificationOverdue: boolean;
+  tatOverdue: boolean;
+  extendedOverdue: boolean;
+}
+
+const DEFAULT_ALARM_TRIGGERS: AlarmTriggers = {
+  collected: true,
+  triggerOverdue: true,
+  resultOverdue: true,
+  verificationOverdue: true,
+  tatOverdue: true,
+  extendedOverdue: true,
+};
+
+const ALARM_TRIGGER_OPTIONS: { id: keyof AlarmTriggers; label: string; desc: string; color: string }[] = [
+  { id: 'collected', label: 'Sample Collected / Batch Generated', desc: 'Alert when sample is pending LIS search or batched', color: '#ef4444' },
+  { id: 'triggerOverdue', label: 'Trigger Time Overdue', desc: 'Alert when department collection trigger is exceeded', color: '#f59e0b' },
+  { id: 'resultOverdue', label: 'Result Time Overdue', desc: 'Alert when sample is received but result is delayed', color: '#f59e0b' },
+  { id: 'verificationOverdue', label: 'Verification Overdue', desc: 'Alert when result is completed but not verified', color: '#a855f7' },
+  { id: 'tatOverdue', label: 'Target TAT Overdue', desc: 'Alert when total turnaround time is breached', color: '#ef4444' },
+  { id: 'extendedOverdue', label: 'Extra Time Overdue (Critical)', desc: 'Alert when sample breaches extended grace time', color: '#dc2626' },
+];
 
 interface Sample {
   id: string;
@@ -42,6 +69,51 @@ export default function Dashboard() {
   });
   const [isScanning, setIsScanning] = useState(false);
   const [isMuted, setIsMuted] = useState(false); // Default Alarm ON on login
+  const [alarmTriggers, setAlarmTriggers] = useState<AlarmTriggers>(() => {
+    if (typeof window !== 'undefined') {
+      const saved = localStorage.getItem('nexus_alarm_triggers');
+      if (saved) {
+        try {
+          return { ...DEFAULT_ALARM_TRIGGERS, ...JSON.parse(saved) };
+        } catch (e) {}
+      }
+    }
+    return DEFAULT_ALARM_TRIGGERS;
+  });
+  const [isAlarmDropdownOpen, setIsAlarmDropdownOpen] = useState(false);
+  const alarmDropdownRef = useRef<HTMLDivElement>(null);
+
+  const toggleAlarmTrigger = (key: keyof AlarmTriggers) => {
+    setAlarmTriggers(prev => {
+      const next = { ...prev, [key]: !prev[key] };
+      localStorage.setItem('nexus_alarm_triggers', JSON.stringify(next));
+      return next;
+    });
+  };
+
+  const handleSetAllAlarmTriggers = (val: boolean) => {
+    const next: AlarmTriggers = {
+      collected: val,
+      triggerOverdue: val,
+      resultOverdue: val,
+      verificationOverdue: val,
+      tatOverdue: val,
+      extendedOverdue: val,
+    };
+    setAlarmTriggers(next);
+    localStorage.setItem('nexus_alarm_triggers', JSON.stringify(next));
+  };
+
+  useEffect(() => {
+    const handleClickOutside = (e: MouseEvent) => {
+      if (alarmDropdownRef.current && !alarmDropdownRef.current.contains(e.target as Node)) {
+        setIsAlarmDropdownOpen(false);
+      }
+    };
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, []);
+
   const [deleteModal, setDeleteModal] = useState<string | null>(null);
   const [receiveModal, setReceiveModal] = useState<string | null>(null);
   const [editModal, setEditModal] = useState<{ id: string, barcode: string } | null>(null);
@@ -372,11 +444,18 @@ export default function Dashboard() {
     const hasAlarmSamples = samples.some(s => {
       // Check if user has access to this sample's department
       const hasDeptAccess = user?.username === 'admin' || (s.departments && s.departments.some(dName => departments.some(dept => dept.name === dName)));
-      
-      return hasDeptAccess && !mutedSamples.has(s.id) && (
-        s.status.toLowerCase().includes('collected') || 
-        s.status.toLowerCase().includes('batch generated') ||
-        s.isOverdueAfterExtraTime
+      if (!hasDeptAccess || mutedSamples.has(s.id)) return false;
+
+      const sLower = s.status.toLowerCase();
+      const isCollected = sLower.includes('collected') || sLower.includes('batch generated');
+
+      return (
+        (alarmTriggers.collected && isCollected) ||
+        (alarmTriggers.triggerOverdue && !!s.isTriggerOverdue) ||
+        (alarmTriggers.resultOverdue && !!s.isResultOverdue) ||
+        (alarmTriggers.verificationOverdue && !!s.isVerificationOverdue) ||
+        (alarmTriggers.tatOverdue && !!s.isOverdue) ||
+        (alarmTriggers.extendedOverdue && !!s.isOverdueAfterExtraTime)
       );
     });
 
@@ -384,7 +463,7 @@ export default function Dashboard() {
       const interval = setInterval(playAlarm, 3000);
       return () => clearInterval(interval);
     }
-  }, [samples, isMuted, mutedSamples]);
+  }, [samples, isMuted, mutedSamples, alarmTriggers, user, departments]);
 
   const handleClearAll = async () => {
     if (confirm("Are you sure you want to completely remove all data?")) {
@@ -676,26 +755,175 @@ export default function Dashboard() {
                       </button>
                     </span>
                   )}
-                  <button 
-                    onClick={() => setIsMuted(!isMuted)}
-                    style={{ 
-                      background: isMuted ? 'transparent' : 'rgba(16, 185, 129, 0.12)', 
-                      color: isMuted ? 'var(--text-secondary)' : '#10b981', 
-                      border: `1px solid ${isMuted ? 'var(--border-color)' : '#10b981'}`, 
-                      padding: '2px 8px', 
-                      borderRadius: '4px', 
-                      cursor: 'pointer', 
+                  {/* Alarm Control with Customizable Dropdown */}
+                  <div ref={alarmDropdownRef} style={{ position: 'relative', display: 'inline-flex' }}>
+                    <div style={{ 
                       display: 'flex', 
-                      alignItems: 'center', 
-                      gap: '5px',
-                      fontSize: '0.75rem',
-                      fontWeight: 600
-                    }}
-                    title={isMuted ? "Alarm is currently muted. Click to turn Alarm ON." : "Alarm is currently active. Click to mute / turn Alarm OFF."}
-                  >
-                    {isMuted ? <VolumeX size={14} /> : <Volume2 size={14} />}
-                    <span>{isMuted ? "Alarm OFF" : "Alarm ON"}</span>
-                  </button>
+                      alignItems: 'stretch', 
+                      borderRadius: '4px', 
+                      overflow: 'hidden', 
+                      border: `1px solid ${isMuted ? 'var(--border-color)' : '#10b981'}`, 
+                      background: isMuted ? 'transparent' : 'rgba(16, 185, 129, 0.08)' 
+                    }}>
+                      <button 
+                        onClick={() => setIsMuted(!isMuted)}
+                        style={{ 
+                          background: 'transparent', 
+                          border: 'none', 
+                          color: isMuted ? 'var(--text-secondary)' : '#10b981', 
+                          padding: '2px 8px', 
+                          cursor: 'pointer', 
+                          display: 'flex', 
+                          alignItems: 'center', 
+                          gap: '5px',
+                          fontSize: '0.75rem',
+                          fontWeight: 600
+                        }}
+                        title={isMuted ? "Alarm is currently muted. Click to turn Alarm ON." : "Alarm is currently active. Click to mute."}
+                      >
+                        {isMuted ? <VolumeX size={14} /> : <Volume2 size={14} />}
+                        <span>{isMuted ? "Alarm OFF" : "Alarm ON"}</span>
+                      </button>
+                      
+                      <button
+                        onClick={() => setIsAlarmDropdownOpen(!isAlarmDropdownOpen)}
+                        style={{
+                          background: isMuted ? 'rgba(255, 255, 255, 0.04)' : 'rgba(16, 185, 129, 0.18)',
+                          border: 'none',
+                          borderLeft: `1px solid ${isMuted ? 'var(--border-color)' : 'rgba(16, 185, 129, 0.3)'}`,
+                          color: isMuted ? 'var(--text-secondary)' : '#10b981',
+                          padding: '0 5px',
+                          cursor: 'pointer',
+                          display: 'flex',
+                          alignItems: 'center',
+                          justifyContent: 'center',
+                        }}
+                        title="Configure Alarm triggers & options (Dropdown)"
+                      >
+                        <ChevronDown size={12} style={{ transform: isAlarmDropdownOpen ? 'rotate(180deg)' : 'rotate(0deg)', transition: 'transform 0.15s' }} />
+                      </button>
+                    </div>
+
+                    {/* Alarm Triggers Dropdown Menu */}
+                    {isAlarmDropdownOpen && (
+                      <div style={{
+                        position: 'absolute',
+                        top: 'calc(100% + 6px)',
+                        right: 0,
+                        width: '320px',
+                        background: 'var(--bg-secondary)',
+                        border: '1px solid var(--border-color)',
+                        borderRadius: '10px',
+                        boxShadow: '0 12px 30px rgba(0, 0, 0, 0.5)',
+                        zIndex: 100,
+                        padding: '12px',
+                        animation: 'scaleIn 0.15s ease-out'
+                      }}>
+                        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', paddingBottom: '8px', borderBottom: '1px solid var(--border-color)', marginBottom: '8px' }}>
+                          <div>
+                            <div style={{ fontWeight: 600, fontSize: '0.85rem', color: 'var(--text-primary)', display: 'flex', alignItems: 'center', gap: '6px' }}>
+                              <Bell size={14} style={{ color: 'var(--accent-primary)' }} />
+                              <span>Alarm Triggers</span>
+                            </div>
+                            <div style={{ fontSize: '0.72rem', color: 'var(--text-secondary)', marginTop: '2px' }}>
+                              Select events that sound the alarm
+                            </div>
+                          </div>
+                          <button
+                            onClick={() => setIsMuted(!isMuted)}
+                            style={{
+                              fontSize: '0.72rem',
+                              padding: '2px 8px',
+                              borderRadius: '12px',
+                              border: `1px solid ${isMuted ? 'var(--border-color)' : '#10b981'}`,
+                              background: isMuted ? 'var(--bg-tertiary)' : 'rgba(16, 185, 129, 0.2)',
+                              color: isMuted ? 'var(--text-secondary)' : '#10b981',
+                              cursor: 'pointer',
+                              fontWeight: 600
+                            }}
+                          >
+                            {isMuted ? "Muted" : "Active"}
+                          </button>
+                        </div>
+
+                        {/* Trigger Checkboxes */}
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: '6px', maxHeight: '280px', overflowY: 'auto' }}>
+                          {ALARM_TRIGGER_OPTIONS.map(opt => {
+                            const isChecked = alarmTriggers[opt.id];
+                            return (
+                              <label
+                                key={opt.id}
+                                style={{
+                                  display: 'flex',
+                                  alignItems: 'flex-start',
+                                  gap: '8px',
+                                  padding: '6px 8px',
+                                  borderRadius: '6px',
+                                  background: isChecked ? 'rgba(59, 130, 246, 0.05)' : 'transparent',
+                                  cursor: 'pointer',
+                                  transition: 'background 0.15s'
+                                }}
+                              >
+                                <input
+                                  type="checkbox"
+                                  checked={isChecked}
+                                  onChange={() => toggleAlarmTrigger(opt.id)}
+                                  style={{ marginTop: '3px', cursor: 'pointer', accentColor: 'var(--accent-primary)' }}
+                                />
+                                <div style={{ flex: 1, minWidth: 0 }}>
+                                  <div style={{ fontSize: '0.78rem', fontWeight: 600, color: 'var(--text-primary)', display: 'flex', alignItems: 'center', gap: '6px' }}>
+                                    <span style={{ width: '6px', height: '6px', borderRadius: '50%', background: opt.color, flexShrink: 0 }} />
+                                    <span>{opt.label}</span>
+                                  </div>
+                                  <div style={{ fontSize: '0.7rem', color: 'var(--text-secondary)', marginTop: '2px', lineHeight: 1.2 }}>
+                                    {opt.desc}
+                                  </div>
+                                </div>
+                              </label>
+                            );
+                          })}
+                        </div>
+
+                        {/* Footer Controls */}
+                        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', paddingTop: '10px', marginTop: '8px', borderTop: '1px solid var(--border-color)' }}>
+                          <div style={{ display: 'flex', gap: '6px' }}>
+                            <button
+                              onClick={() => handleSetAllAlarmTriggers(true)}
+                              style={{ fontSize: '0.72rem', background: 'transparent', border: 'none', color: 'var(--accent-primary)', cursor: 'pointer', padding: 0, textDecoration: 'underline' }}
+                            >
+                              Select All
+                            </button>
+                            <span style={{ color: 'var(--text-secondary)', fontSize: '0.72rem' }}>|</span>
+                            <button
+                              onClick={() => handleSetAllAlarmTriggers(false)}
+                              style={{ fontSize: '0.72rem', background: 'transparent', border: 'none', color: 'var(--text-secondary)', cursor: 'pointer', padding: 0, textDecoration: 'underline' }}
+                            >
+                              Clear All
+                            </button>
+                          </div>
+                          <button
+                            onClick={playAlarm}
+                            style={{
+                              fontSize: '0.72rem',
+                              padding: '3px 8px',
+                              borderRadius: '4px',
+                              border: '1px solid var(--border-color)',
+                              background: 'var(--bg-tertiary)',
+                              color: 'var(--text-primary)',
+                              cursor: 'pointer',
+                              display: 'flex',
+                              alignItems: 'center',
+                              gap: '4px'
+                            }}
+                            title="Play test alarm beep"
+                          >
+                            <Volume2 size={12} />
+                            <span>Test Sound</span>
+                          </button>
+                        </div>
+                      </div>
+                    )}
+                  </div>
                   <button 
                     onClick={handleClearAll}
                     style={{ background: 'var(--danger)', color: 'white', border: 'none', padding: '2px 6px', borderRadius: '4px', cursor: 'pointer', fontSize: '0.7rem', fontWeight: 600 }}>

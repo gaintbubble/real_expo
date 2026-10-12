@@ -183,28 +183,27 @@ export default function Header() {
         </div>
         
         <div className="header-actions">
-          {/* Quick Header Password Change Button */}
+          {/* Quick Header Password Change Button (Icon Only) */}
           <button 
             type="button"
+            className="icon-btn"
             onClick={handleOpenPasswordModal}
             title="Change Password"
             style={{
+              background: 'rgba(59, 130, 246, 0.1)',
+              border: '1px solid rgba(59, 130, 246, 0.25)',
+              color: 'var(--accent-primary)',
+              width: '36px',
+              height: '36px',
+              borderRadius: '8px',
               display: 'flex',
               alignItems: 'center',
-              gap: '6px',
-              background: 'rgba(59, 130, 246, 0.1)',
-              border: '1px solid rgba(59, 130, 246, 0.3)',
-              color: 'var(--accent-primary)',
-              padding: '6px 12px',
-              borderRadius: '8px',
+              justifyContent: 'center',
               cursor: 'pointer',
-              fontSize: '0.82rem',
-              fontWeight: 600,
               transition: 'all 0.2s ease',
             }}
           >
-            <Key size={15} />
-            <span>Change Password</span>
+            <Key size={17} />
           </button>
           
           {/* User Profile with Dropdown */}
