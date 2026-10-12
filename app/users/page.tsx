@@ -23,8 +23,7 @@ const AVAILABLE_MODULES = [
   'Dashboard',
   'Departments',
   'Test Config',
-  'Users',
-  'Settings'
+  'Users'
 ];
 
 export default function UsersPage() {

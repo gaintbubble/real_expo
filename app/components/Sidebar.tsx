@@ -5,7 +5,6 @@ import Link from 'next/link';
 import { usePathname, useRouter } from 'next/navigation';
 import { 
   LayoutDashboard, 
-  Settings, 
   LogOut,
   ChevronLeft,
   ChevronRight,
@@ -39,13 +38,9 @@ export default function Sidebar() {
     { name: 'Departments', href: '/departments', icon: <Building2 size={20} /> },
     { name: 'Test Config', href: '/test-config', icon: <ClipboardList size={20} /> },
     { name: 'Users', href: '/users', icon: <UserCog size={20} /> },
-    { name: 'Settings', href: '/settings', icon: <Settings size={20} /> },
   ];
 
-  const navItems = allNavItems.filter(item => {
-    if (item.name === 'Settings') return true;
-    return userModules.includes(item.name);
-  });
+  const navItems = allNavItems.filter(item => userModules.includes(item.name));
 
   return (
     <>
