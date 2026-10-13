@@ -2,7 +2,7 @@
 
 import prisma from '../lib/prisma';
 
-export async function editDepartment(id: string, name: string, triggerTime?: number | null) {
+export async function editDepartment(id: string, name: string, triggerTime?: number | null, provisionalTime?: number | null) {
   try {
     const existing = await prisma.department.findUnique({
       where: { name }
@@ -14,7 +14,7 @@ export async function editDepartment(id: string, name: string, triggerTime?: num
 
     const department = await prisma.department.update({
       where: { id },
-      data: { name, triggerTime }
+      data: { name, triggerTime, provisionalTime }
     });
 
     return { success: true, department };
@@ -36,7 +36,7 @@ export async function getDepartments() {
   }
 }
 
-export async function addDepartment(name: string, triggerTime?: number | null) {
+export async function addDepartment(name: string, triggerTime?: number | null, provisionalTime?: number | null) {
   try {
     const existing = await prisma.department.findUnique({
       where: { name }
@@ -47,7 +47,7 @@ export async function addDepartment(name: string, triggerTime?: number | null) {
     }
 
     const department = await prisma.department.create({
-      data: { name, triggerTime }
+      data: { name, triggerTime, provisionalTime }
     });
 
     return { success: true, department };

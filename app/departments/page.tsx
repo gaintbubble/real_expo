@@ -8,6 +8,7 @@ interface Department {
   id: string;
   name: string;
   triggerTime?: number | null;
+  provisionalTime?: number | null;
 }
 
 export default function DepartmentsPage() {
@@ -15,6 +16,8 @@ export default function DepartmentsPage() {
   const [nameInput, setNameInput] = useState('');
   const [triggerTimeInput, setTriggerTimeInput] = useState('');
   const [triggerTimeEnabled, setTriggerTimeEnabled] = useState(false);
+  const [provisionalTimeInput, setProvisionalTimeInput] = useState('');
+  const [provisionalTimeEnabled, setProvisionalTimeEnabled] = useState(false);
   const [loading, setLoading] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
 
@@ -32,18 +35,22 @@ export default function DepartmentsPage() {
     if (!nameInput.trim()) return;
     setLoading(true);
     const triggerTimeValue = (triggerTimeEnabled && triggerTimeInput.trim()) ? parseInt(triggerTimeInput.trim()) : null;
+    const provisionalTimeValue = (provisionalTimeEnabled && provisionalTimeInput.trim()) ? parseInt(provisionalTimeInput.trim()) : null;
     
     if (editingId) {
       const res = await editDepartment(
         editingId,
         nameInput.trim(),
-        isNaN(triggerTimeValue as number) ? null : triggerTimeValue
+        isNaN(triggerTimeValue as number) ? null : triggerTimeValue,
+        isNaN(provisionalTimeValue as number) ? null : provisionalTimeValue
       );
       if (res.success) {
         setEditingId(null);
         setNameInput('');
         setTriggerTimeInput('');
         setTriggerTimeEnabled(false);
+        setProvisionalTimeInput('');
+        setProvisionalTimeEnabled(false);
         await loadDepartments();
       } else {
         alert(res.message);
@@ -51,12 +58,15 @@ export default function DepartmentsPage() {
     } else {
       const res = await addDepartment(
         nameInput.trim(),
-        isNaN(triggerTimeValue as number) ? undefined : triggerTimeValue
+        isNaN(triggerTimeValue as number) ? undefined : triggerTimeValue,
+        isNaN(provisionalTimeValue as number) ? undefined : provisionalTimeValue
       );
       if (res.success) {
         setNameInput('');
         setTriggerTimeInput('');
         setTriggerTimeEnabled(false);
+        setProvisionalTimeInput('');
+        setProvisionalTimeEnabled(false);
         await loadDepartments();
       } else {
         alert(res.message);
@@ -70,6 +80,8 @@ export default function DepartmentsPage() {
     setNameInput(dept.name);
     setTriggerTimeInput(dept.triggerTime ? dept.triggerTime.toString() : '');
     setTriggerTimeEnabled(dept.triggerTime != null);
+    setProvisionalTimeInput(dept.provisionalTime ? dept.provisionalTime.toString() : '');
+    setProvisionalTimeEnabled(dept.provisionalTime != null);
   };
 
   const handleCancelEdit = () => {
@@ -77,6 +89,8 @@ export default function DepartmentsPage() {
     setNameInput('');
     setTriggerTimeInput('');
     setTriggerTimeEnabled(false);
+    setProvisionalTimeInput('');
+    setProvisionalTimeEnabled(false);
   };
 
   const handleRemove = async (id: string) => {
@@ -134,6 +148,28 @@ export default function DepartmentsPage() {
               />
             )}
           </div>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', background: 'var(--bg-tertiary)', padding: '0.75rem 1rem', borderRadius: '8px', border: '1px solid var(--border-color)' }}>
+            <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', color: 'var(--text-secondary)', cursor: 'pointer', whiteSpace: 'nowrap', userSelect: 'none' }}>
+              <input 
+                type="checkbox" 
+                checked={provisionalTimeEnabled}
+                onChange={(e) => setProvisionalTimeEnabled(e.target.checked)}
+                disabled={loading}
+                style={{ width: '16px', height: '16px', cursor: 'pointer' }}
+              />
+              Provisional Time
+            </label>
+            {provisionalTimeEnabled && (
+              <input 
+                type="number" 
+                value={provisionalTimeInput}
+                onChange={(e) => setProvisionalTimeInput(e.target.value)}
+                placeholder="Mins"
+                style={{ width: '80px', padding: '0.25rem 0.5rem', borderRadius: '4px', border: '1px solid var(--border-color)', background: 'var(--bg-secondary)', color: 'white', outline: 'none' }}
+                disabled={loading}
+              />
+            )}
+          </div>
           <button 
             type="submit"
             disabled={loading}
@@ -169,14 +205,15 @@ export default function DepartmentsPage() {
               <tr>
                 <th style={{ width: '60px', textAlign: 'center' }}>No.</th>
                 <th>Department Name</th>
-                <th style={{ width: '150px', textAlign: 'center' }}>Trigger Time</th>
+                <th style={{ width: '130px', textAlign: 'center' }}>Trigger Time</th>
+                <th style={{ width: '140px', textAlign: 'center' }}>Provisional Time</th>
                 <th style={{ width: '100px', textAlign: 'center' }}>Actions</th>
               </tr>
             </thead>
             <tbody>
               {departments.length === 0 ? (
                 <tr>
-                  <td colSpan={3} style={{ textAlign: 'center', padding: '2rem', color: 'var(--text-secondary)' }}>
+                  <td colSpan={5} style={{ textAlign: 'center', padding: '2rem', color: 'var(--text-secondary)' }}>
                     No departments found. Add one above.
                   </td>
                 </tr>
@@ -187,6 +224,9 @@ export default function DepartmentsPage() {
                     <td className="info-value">{dept.name}</td>
                     <td style={{ textAlign: 'center', color: 'var(--text-secondary)' }}>
                       {dept.triggerTime ? `${dept.triggerTime} mins` : '-'}
+                    </td>
+                    <td style={{ textAlign: 'center', color: 'var(--text-secondary)' }}>
+                      {dept.provisionalTime ? `${dept.provisionalTime} mins` : '-'}
                     </td>
                     <td style={{ textAlign: 'center' }}>
                       <button 

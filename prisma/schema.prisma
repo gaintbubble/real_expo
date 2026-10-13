@@ -29,6 +29,8 @@ model TrackedSample {
   expectedEndTime DateTime?
   nextCheckTime   DateTime?
   isCompleted     Boolean  @default(false)
+  isProvisional   Boolean  @default(false)
+  provisionalExpiry DateTime?
   createdAt       DateTime @default(now())
   updatedAt       DateTime @updatedAt
   
@@ -48,11 +50,12 @@ model StatusHistory {
 }
 
 model Department {
-  id          String   @id @default(uuid())
-  name        String   @unique
-  triggerTime Int?
-  createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
+  id              String   @id @default(uuid())
+  name            String   @unique
+  triggerTime     Int?
+  provisionalTime Int?
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
 
   tests       TestConfig[]
 }

@@ -26,6 +26,12 @@ export async function GET() {
               { nextCheckTime: null },
               { nextCheckTime: { lte: new Date() } }
             ]
+          },
+          {
+            OR: [
+              { isProvisional: false },
+              { provisionalExpiry: { lte: new Date() } }
+            ]
           }
         ]
       },

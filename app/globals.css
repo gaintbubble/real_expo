@@ -269,6 +269,7 @@ body {
 .table-row.status-pending td:first-child::before { background: var(--warning); }
 .table-row.status-completed td:first-child::before { background: var(--success); }
 .table-row.status-waiting td:first-child::before { background: var(--text-secondary); }
+.table-row.status-provisional td:first-child::before { background: #8b5cf6; }
 .table-row.status-collected {
   animation: blinkRed 1.5s infinite;
 }

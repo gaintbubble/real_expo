@@ -1,7 +1,7 @@
 "use client";
 
 import React, { useState, useRef, useEffect } from 'react';
-import { saveBarcodeToDatabase, getAllTrackedSamples, clearAllSamples, deleteSample, updateSampleBarcode, markSampleReceived, extendSampleTime, simulateFalseTrigger } from './actions';
+import { saveBarcodeToDatabase, getAllTrackedSamples, clearAllSamples, deleteSample, updateSampleBarcode, markSampleReceived, extendSampleTime, simulateFalseTrigger, toggleSampleProvisional } from './actions';
 import { getDepartments } from './actions/departments';
 import { DatePicker } from './components/DatePicker';
 import { Edit2, Trash2, Barcode, CheckCircle, Volume2, VolumeX, X as XIcon, ChevronDown, Bell } from 'lucide-react';
@@ -56,6 +56,9 @@ interface Sample {
   isTriggerOverdue?: boolean;
   isResultOverdue?: boolean;
   isVerificationOverdue?: boolean;
+  isProvisional?: boolean;
+  provisionalTime?: number | null;
+  provisionalExpiry?: string | null;
 }
 
 export default function Dashboard() {
@@ -253,7 +256,10 @@ export default function Dashboard() {
             ) && (s.testDetails ? (() => { try { return JSON.parse(s.testDetails).some((t: any) => t.extraTime && t.extraTime > 0); } catch { return false; } })() : false),
             isTriggerOverdue,
             isResultOverdue,
-            isVerificationOverdue
+            isVerificationOverdue,
+            isProvisional: Boolean(s.isProvisional),
+            provisionalTime: s.provisionalTime,
+            provisionalExpiry: s.provisionalExpiry,
           };
         });
         setSamples((prev) => {
@@ -310,6 +316,9 @@ export default function Dashboard() {
       departments: activeTab ? [activeTab] : [],
       isOverdue: false,
       isOverdueAfterExtraTime: false,
+      isProvisional: false,
+      provisionalTime: null,
+      provisionalExpiry: null,
     };
     
     setSamples((prev) => [optimisticSample, ...prev]);
@@ -350,6 +359,9 @@ export default function Dashboard() {
           departments: ('departments' in response.sample && (response.sample as any).departments.length > 0) ? (response.sample as any).departments : (activeTab ? [activeTab] : []),
           isOverdue: false,
           isOverdueAfterExtraTime: false,
+          isProvisional: Boolean(response.sample.isProvisional),
+          provisionalTime: response.sample.provisionalTime || null,
+          provisionalExpiry: response.sample.provisionalExpiry ? new Date(response.sample.provisionalExpiry).toISOString() : null,
         };
         
         setSamples((prev) => prev.map(s => s.id === tempId ? newSample : s));
@@ -444,7 +456,7 @@ export default function Dashboard() {
     const hasAlarmSamples = samples.some(s => {
       // Check if user has access to this sample's department
       const hasDeptAccess = user?.username === 'admin' || (s.departments && s.departments.some(dName => departments.some(dept => dept.name === dName)));
-      if (!hasDeptAccess || mutedSamples.has(s.id)) return false;
+      if (!hasDeptAccess || mutedSamples.has(s.id) || s.isProvisional) return false;
 
       const sLower = s.status.toLowerCase();
       const isCollected = sLower.includes('collected') || sLower.includes('batch generated');
@@ -551,6 +563,28 @@ export default function Dashboard() {
     }
   };
 
+  const [togglingProvisional, setTogglingProvisional] = useState<string | null>(null);
+
+  const handleToggleProvisional = async (id: string) => {
+    try {
+      setTogglingProvisional(id);
+      const res = await toggleSampleProvisional(id);
+      if (res.success && res.sample) {
+        setSamples(prev => prev.map(s => s.id === id ? { 
+          ...s, 
+          isProvisional: res.isProvisional,
+          provisionalExpiry: res.provisionalExpiry 
+        } : s));
+      } else {
+        alert(res.message || "Failed to toggle provisional status.");
+      }
+    } catch (err) {
+      console.error("Toggle provisional error:", err);
+    } finally {
+      setTogglingProvisional(null);
+    }
+  };
+
   const getStatusClass = (status: string) => {
     const s = status.toLowerCase();
     if (s.includes('pending')) return 'pending';
@@ -560,6 +594,7 @@ export default function Dashboard() {
   };
 
   const getCardStatusClass = (sample: Sample) => {
+    if (sample.isProvisional) return 'status-provisional';
     const s = sample.status.toLowerCase();
     
     if (sample.isTriggerOverdue) return 'status-overdue';
@@ -643,6 +678,8 @@ export default function Dashboard() {
         matchesStatusFilter = !!sample.isResultOverdue;
       } else if (statusFilter === 'not_verified') {
         matchesStatusFilter = !!sample.isVerificationOverdue;
+      } else if (statusFilter === 'provisional') {
+        matchesStatusFilter = !!sample.isProvisional;
       }
     }
 
@@ -765,6 +802,7 @@ export default function Dashboard() {
                   <option value="not_received">Not Received</option>
                   <option value="result_not_done">Result Not Done</option>
                   <option value="not_verified">Not Verified</option>
+                  <option value="provisional">Provisional</option>
                 </select>
                 <span style={{ color: 'var(--text-secondary)', fontSize: '0.73rem', display: 'flex', alignItems: 'center', gap: '6px' }}>
                   <span>{filteredSamples.length} {filteredSamples.length !== selectedDeptSamples.length ? `(${selectedDeptSamples.length})` : ''}</span>
@@ -999,7 +1037,7 @@ export default function Dashboard() {
                   <th style={{ width: '70px' }}>Result Time</th>
                   <th style={{ width: '90px' }}>Status</th>
                   <th style={{ width: '95px', textAlign: 'center' }}>Actions</th>
-                  <th style={{ width: '55px', textAlign: 'center' }}>Triger</th>
+                  <th style={{ width: '74px', textAlign: 'center' }}>Triger</th>
                 </tr>
               </thead>
               <tbody>
@@ -1135,9 +1173,31 @@ export default function Dashboard() {
                       ) : '--'}
                     </td>
                     <td>
-                      <span className={`status-badge ${getStatusClass(sample.status)}`}>
-                        {sample.status}
-                      </span>
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: '2px', alignItems: 'flex-start' }}>
+                        <span className={`status-badge ${getStatusClass(sample.status)}`}>
+                          {sample.status}
+                        </span>
+                        {sample.isProvisional && (
+                          <span 
+                            style={{ 
+                              fontSize: '7.5px', 
+                              fontWeight: 700, 
+                              background: '#8b5cf6', 
+                              color: '#ffffff', 
+                              padding: '0px 3px', 
+                              borderRadius: '2px', 
+                              lineHeight: '1.1',
+                              letterSpacing: '0.3px',
+                              display: 'inline-flex',
+                              alignItems: 'center',
+                              gap: '2px'
+                            }}
+                            title={`Provisional Mode: Checking paused${sample.provisionalExpiry ? ` until ${new Date(sample.provisionalExpiry).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}` : ''}`}
+                          >
+                            PROV
+                          </span>
+                        )}
+                      </div>
                     </td>
                     <td style={{ textAlign: 'center' }}>
                       <div style={{ display: 'flex', justifyContent: 'center', gap: '3px' }}>
@@ -1188,7 +1248,7 @@ export default function Dashboard() {
                       </div>
                     </td>
                     <td style={{ textAlign: 'center' }}>
-                      <div style={{ display: 'flex', justifyContent: 'center', gap: '2px' }}>
+                      <div style={{ display: 'flex', justifyContent: 'center', gap: '2px', alignItems: 'center' }}>
                         <button 
                           onClick={() => handleFalseTrigger(sample.id, 'trigger')}
                           style={{ background: 'var(--bg-tertiary)', border: '1px solid var(--border-color)', borderRadius: '2px', padding: '0px 3px', fontSize: '8px', fontWeight: 'bold', cursor: 'pointer', lineHeight: '1.2' }}
@@ -1209,6 +1269,28 @@ export default function Dashboard() {
                           title="Verification Time"
                         >
                           V
+                        </button>
+                        <button 
+                          onClick={() => handleToggleProvisional(sample.id)}
+                          disabled={togglingProvisional === sample.id}
+                          style={{ 
+                            background: sample.isProvisional ? '#8b5cf6' : 'var(--bg-tertiary)', 
+                            color: sample.isProvisional ? '#ffffff' : 'var(--text-secondary)',
+                            border: sample.isProvisional ? '1px solid #7c3aed' : '1px solid var(--border-color)', 
+                            borderRadius: '2px', 
+                            padding: '0px 3px', 
+                            fontSize: '8px', 
+                            fontWeight: 'bold', 
+                            cursor: 'pointer', 
+                            lineHeight: '1.2',
+                            boxShadow: sample.isProvisional ? '0 0 4px rgba(139, 92, 246, 0.4)' : 'none',
+                            opacity: togglingProvisional === sample.id ? 0.6 : 1
+                          }}
+                          title={sample.isProvisional 
+                            ? `Provisional ON (checking paused). Click to Turn OFF${sample.provisionalExpiry ? ` (Expires ${new Date(sample.provisionalExpiry).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })})` : ''}` 
+                            : `Provisional OFF. Click to Turn ON (Pause checking for ${sample.provisionalTime || 60}m)`}
+                        >
+                          {sample.isProvisional ? 'P ON' : 'P'}
                         </button>
                       </div>
                     </td>

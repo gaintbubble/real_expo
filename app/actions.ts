@@ -60,14 +60,14 @@ export async function getAllTrackedSamples(dateStr?: string) {
     });
     
     const departmentsList = await prisma.department.findMany();
-    const deptMap = new Map(departmentsList.map(d => [d.name, d.triggerTime]));
+    const deptMap = new Map(departmentsList.map(d => [d.name, { triggerTime: d.triggerTime, provisionalTime: d.provisionalTime }]));
 
     const serviceCds = samples.map(s => s.serviceCd).filter(Boolean) as string[];
     const uniqueServiceCds = Array.from(new Set(
       serviceCds.flatMap(cdList => cdList.split(',').map(cd => cd.trim()))
     ));
     
-    let configMap = new Map<string, { name: string, department: string, triggerTime: number | null, intervalTime: number | null, intervalTimeVerified: number | null }>();
+    let configMap = new Map<string, { name: string, department: string, triggerTime: number | null, provisionalTime: number | null, intervalTime: number | null, intervalTimeVerified: number | null }>();
     if (uniqueServiceCds.length > 0) {
       const configs = await prisma.testConfig.findMany({
         where: {
@@ -81,6 +81,7 @@ export async function getAllTrackedSamples(dateStr?: string) {
           name: c.shortName || c.testName, 
           department: c.department.name,
           triggerTime: c.department.triggerTime,
+          provisionalTime: c.department.provisionalTime,
           intervalTime: c.intervalTime,
           intervalTimeVerified: c.intervalTimeVerified
         }
@@ -89,6 +90,7 @@ export async function getAllTrackedSamples(dateStr?: string) {
 
     return samples.map(s => {
       let minTriggerTime = Infinity;
+      let minProvisionalTime = Infinity;
       let minIntervalTime = Infinity;
       let minIntervalTimeVerified = Infinity;
 
@@ -98,8 +100,9 @@ export async function getAllTrackedSamples(dateStr?: string) {
         if (s.serviceCd.startsWith('DEPT:')) {
           const deptName = s.serviceCd.substring(5);
           departments.push(deptName);
-          const tTime = deptMap.get(deptName);
-          if (tTime != null && tTime < minTriggerTime) minTriggerTime = tTime;
+          const deptData = deptMap.get(deptName);
+          if (deptData?.triggerTime != null && deptData.triggerTime < minTriggerTime) minTriggerTime = deptData.triggerTime;
+          if (deptData?.provisionalTime != null && deptData.provisionalTime < minProvisionalTime) minProvisionalTime = deptData.provisionalTime;
         } else {
           const individualCds = s.serviceCd.split(',').map(cd => cd.trim());
           const originalTestNames = s.testName.split(',').map(name => name.trim());
@@ -113,6 +116,7 @@ export async function getAllTrackedSamples(dateStr?: string) {
                   departments.push(mapped.department);
                 }
                 if (mapped.triggerTime != null && mapped.triggerTime < minTriggerTime) minTriggerTime = mapped.triggerTime;
+                if (mapped.provisionalTime != null && mapped.provisionalTime < minProvisionalTime) minProvisionalTime = mapped.provisionalTime;
                 if (mapped.intervalTime != null && mapped.intervalTime < minIntervalTime) minIntervalTime = mapped.intervalTime;
                 if (mapped.intervalTimeVerified != null && mapped.intervalTimeVerified < minIntervalTimeVerified) minIntervalTimeVerified = mapped.intervalTimeVerified;
                 
@@ -128,8 +132,11 @@ export async function getAllTrackedSamples(dateStr?: string) {
         displayTestName,
         departments,
         triggerTime: minTriggerTime === Infinity ? null : minTriggerTime,
+        provisionalTime: minProvisionalTime === Infinity ? null : minProvisionalTime,
         intervalTime: minIntervalTime === Infinity ? null : minIntervalTime,
         intervalTimeVerified: minIntervalTimeVerified === Infinity ? null : minIntervalTimeVerified,
+        isProvisional: Boolean(s.isProvisional),
+        provisionalExpiry: s.provisionalExpiry ? s.provisionalExpiry.toISOString() : null,
       };
     });
   } catch (error) {
@@ -304,6 +311,93 @@ export async function simulateFalseTrigger(id: string, type: 'trigger' | 'result
     return { success: true, sample };
   } catch (error) {
     console.error("False trigger error:", error);
+    return { success: false, message: "Database error" };
+  }
+}
+
+export async function toggleSampleProvisional(id: string, enable?: boolean) {
+  try {
+    const existing = await prisma.trackedSample.findUnique({ where: { id } });
+    if (!existing) return { success: false, message: "Sample not found" };
+
+    const shouldEnable = enable !== undefined ? enable : !existing.isProvisional;
+
+    if (shouldEnable) {
+      // Find the department provisional time for this sample
+      let provMins = 60; // fallback default
+      const departmentsList = await prisma.department.findMany();
+      const deptMap = new Map(departmentsList.map(d => [d.name, d.provisionalTime]));
+
+      if (existing.serviceCd) {
+        if (existing.serviceCd.startsWith('DEPT:')) {
+          const deptName = existing.serviceCd.substring(5);
+          const t = deptMap.get(deptName);
+          if (t != null && t > 0) provMins = t;
+        } else {
+          const individualCds = existing.serviceCd.split(',').map(cd => cd.trim());
+          const configs = await prisma.testConfig.findMany({
+            where: { serviceCd: { in: individualCds } },
+            include: { department: true }
+          });
+          const provTimes = configs.map(c => c.department.provisionalTime).filter(t => t != null && t > 0) as number[];
+          if (provTimes.length > 0) {
+            provMins = Math.min(...provTimes);
+          }
+        }
+      }
+
+      const expiry = new Date(Date.now() + provMins * 60000);
+
+      const updated = await prisma.trackedSample.update({
+        where: { id },
+        data: {
+          isProvisional: true,
+          provisionalExpiry: expiry,
+          nextCheckTime: expiry
+        }
+      });
+
+      await prisma.statusHistory.create({
+        data: {
+          sampleId: id,
+          status: `Provisional ON (${provMins}m)`
+        }
+      });
+
+      return { 
+        success: true, 
+        isProvisional: true, 
+        provisionalExpiry: expiry.toISOString(), 
+        sample: updated,
+        mins: provMins 
+      };
+    } else {
+      // Turn OFF provisional mode -> resume checking immediately
+      const updated = await prisma.trackedSample.update({
+        where: { id },
+        data: {
+          isProvisional: false,
+          provisionalExpiry: null,
+          nextCheckTime: new Date()
+        }
+      });
+
+      await prisma.statusHistory.create({
+        data: {
+          sampleId: id,
+          status: "Provisional OFF"
+        }
+      });
+
+      return { 
+        success: true, 
+        isProvisional: false, 
+        provisionalExpiry: null, 
+        sample: updated 
+      };
+    }
+  } catch (error) {
+    console.error("Toggle provisional error:", error);
     return { success: false, message: "Database error" };
   }
 }
