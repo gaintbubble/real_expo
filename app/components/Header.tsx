@@ -12,7 +12,6 @@ import {
   CheckCircle2, 
   AlertCircle, 
   ChevronDown, 
-  Settings as SettingsIcon, 
   LogOut 
 } from 'lucide-react';
 import { changePassword } from '../actions/auth';
@@ -255,32 +254,6 @@ export default function Header() {
                 >
                   <Key size={15} style={{ color: 'var(--accent-primary)' }} />
                   <span>Change Password</span>
-                </button>
-
-                <button
-                  type="button"
-                  onClick={() => { setIsProfileMenuOpen(false); router.push('/settings'); }}
-                  style={{
-                    display: 'flex',
-                    alignItems: 'center',
-                    gap: '10px',
-                    width: '100%',
-                    padding: '8px 12px',
-                    borderRadius: '8px',
-                    border: 'none',
-                    background: 'transparent',
-                    color: 'var(--text-primary)',
-                    fontSize: '0.85rem',
-                    fontWeight: 500,
-                    cursor: 'pointer',
-                    textAlign: 'left',
-                    transition: 'background 0.15s'
-                  }}
-                  onMouseEnter={(e) => e.currentTarget.style.background = 'rgba(255, 255, 255, 0.05)'}
-                  onMouseLeave={(e) => e.currentTarget.style.background = 'transparent'}
-                >
-                  <SettingsIcon size={15} style={{ color: 'var(--text-secondary)' }} />
-                  <span>Account Settings</span>
                 </button>
 
                 <div style={{ height: '1px', background: 'var(--border-color)', margin: '4px 0' }} />
