@@ -53,18 +53,18 @@ export function DatePicker({ value, onChange, placeholder = "Select date" }: Dat
     <div className="custom-datepicker" ref={containerRef} style={{ position: 'relative' }}>
       <div 
         className="header-search" 
-        style={{ width: '160px', padding: '0.35rem 0.75rem', margin: 0, cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}
+        style={{ width: '130px', padding: '0.2rem 0.5rem', margin: 0, cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'space-between', height: '26px' }}
         onClick={() => setIsOpen(!isOpen)}
       >
-        <div style={{ display: 'flex', alignItems: 'center', gap: '8px', overflow: 'hidden' }}>
-          <CalendarIcon size={16} className="search-icon" style={{ margin: 0, flexShrink: 0 }} />
-          <span style={{ fontSize: '0.85rem', color: value ? 'var(--text-primary)' : 'var(--text-secondary)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '6px', overflow: 'hidden' }}>
+          <CalendarIcon size={13} className="search-icon" style={{ margin: 0, flexShrink: 0 }} />
+          <span style={{ fontSize: '0.75rem', color: value ? 'var(--text-primary)' : 'var(--text-secondary)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
             {value || placeholder}
           </span>
         </div>
         {value && (
           <X 
-            size={14} 
+            size={12} 
             style={{ color: 'var(--text-secondary)', cursor: 'pointer', flexShrink: 0 }} 
             onClick={(e) => {
               e.stopPropagation();
@@ -78,27 +78,27 @@ export function DatePicker({ value, onChange, placeholder = "Select date" }: Dat
         <div style={{
           position: 'absolute',
           top: '100%',
-          marginTop: '8px',
+          marginTop: '6px',
           right: 0,
-          width: '280px',
+          width: '250px',
           background: 'var(--glass-bg, #1e293b)',
           backdropFilter: 'blur(12px)',
           border: '1px solid var(--glass-border, rgba(255, 255, 255, 0.05))',
-          borderRadius: '12px',
-          padding: '1rem',
+          borderRadius: '10px',
+          padding: '0.75rem',
           boxShadow: '0 10px 30px -10px rgba(0, 0, 0, 0.5)',
           zIndex: 50,
           animation: 'fadeInDown 0.2s ease-out'
         }}>
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem' }}>
-            <button onClick={prevMonth} style={{ background: 'transparent', border: 'none', color: 'var(--text-primary)', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '4px', borderRadius: '4px' }} className="icon-btn">
-              <ChevronLeft size={18} />
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.75rem' }}>
+            <button onClick={prevMonth} style={{ background: 'transparent', border: 'none', color: 'var(--text-primary)', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '2px', borderRadius: '4px' }} className="icon-btn">
+              <ChevronLeft size={16} />
             </button>
-            <div style={{ fontWeight: 600, fontSize: '0.95rem' }}>
+            <div style={{ fontWeight: 600, fontSize: '0.85rem' }}>
               {monthNames[currentMonth.getMonth()]} {currentMonth.getFullYear()}
             </div>
-            <button onClick={nextMonth} style={{ background: 'transparent', border: 'none', color: 'var(--text-primary)', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '4px', borderRadius: '4px' }} className="icon-btn">
-              <ChevronRight size={18} />
+            <button onClick={nextMonth} style={{ background: 'transparent', border: 'none', color: 'var(--text-primary)', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '2px', borderRadius: '4px' }} className="icon-btn">
+              <ChevronRight size={16} />
             </button>
           </div>
           

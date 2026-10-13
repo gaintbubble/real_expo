@@ -653,8 +653,8 @@ export default function Dashboard() {
     <div className="dashboard-container">
       <main>
         <section className="samples-section">
-          <div className="section-header" style={{ flexDirection: 'column', alignItems: 'flex-start', gap: '15px' }}>
-            <div className="tabs-container" style={{ display: 'flex', gap: '10px', overflowX: 'auto', paddingBottom: '10px', width: '100%', borderBottom: '1px solid var(--border-color)' }}>
+          <div className="section-header" style={{ flexDirection: 'column', alignItems: 'flex-start', gap: '8px' }}>
+            <div className="tabs-container" style={{ display: 'flex', gap: '6px', overflowX: 'auto', paddingBottom: '6px', width: '100%', borderBottom: '1px solid var(--border-color)' }}>
               {departments.map(dept => {
                 const count = getDeptSampleCount(dept.name);
                 return (
@@ -662,25 +662,25 @@ export default function Dashboard() {
                     key={dept.id}
                     onClick={() => setActiveTab(dept.name)}
                     style={{
-                      padding: '6px 12px',
+                      padding: '3px 8px',
                       borderRadius: '4px',
                       border: 'none',
                       background: activeTab === dept.name ? 'var(--accent-primary)' : 'var(--bg-tertiary)',
                       color: activeTab === dept.name ? 'white' : 'var(--text-secondary)',
                       cursor: 'pointer',
                       fontWeight: 600,
-                      fontSize: '0.8rem',
+                      fontSize: '0.73rem',
                       transition: 'all 0.2s',
                       whiteSpace: 'nowrap',
                       display: 'flex',
                       alignItems: 'center',
-                      gap: '6px'
+                      gap: '5px'
                     }}
                   >
                     <span>{dept.name}</span>
                     <span style={{
-                      fontSize: '0.72rem',
-                      padding: '1px 6px',
+                      fontSize: '0.65rem',
+                      padding: '0px 5px',
                       borderRadius: '10px',
                       background: activeTab === dept.name ? 'rgba(255, 255, 255, 0.25)' : 'rgba(255, 255, 255, 0.08)',
                       color: activeTab === dept.name ? '#ffffff' : 'var(--text-secondary)',
@@ -696,14 +696,14 @@ export default function Dashboard() {
                   onClick={handleSetDefaultDept}
                   style={{
                     marginLeft: 'auto',
-                    padding: '6px 12px',
+                    padding: '3px 8px',
                     borderRadius: '4px',
                     border: '1px solid var(--border-color)',
                     background: 'var(--bg-tertiary)',
                     color: 'var(--text-secondary)',
                     cursor: 'pointer',
                     fontWeight: 600,
-                    fontSize: '0.8rem',
+                    fontSize: '0.72rem',
                     transition: 'all 0.2s',
                     whiteSpace: 'nowrap',
                     display: 'flex',
@@ -712,15 +712,15 @@ export default function Dashboard() {
                   }}
                   title="Make this my default tab"
                 >
-                  <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"></polygon></svg>
+                  <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"></polygon></svg>
                   Set as Default
                 </button>
               )}
             </div>
 
             <div style={{ display: 'flex', justifyContent: 'space-between', width: '100%', alignItems: 'center' }}>
-              <h2 className="section-title">
-                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <h2 className="section-title" style={{ fontSize: '0.95rem' }}>
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                   <rect x="3" y="4" width="18" height="18" rx="2" ry="2"></rect>
                   <line x1="16" y1="2" x2="16" y2="6"></line>
                   <line x1="8" y1="2" x2="8" y2="6"></line>
@@ -728,17 +728,17 @@ export default function Dashboard() {
                 </svg>
                 Dashboard Data
               </h2>
-              <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
-                <form onSubmit={handleScan} className="header-search" style={{ width: '180px', padding: '0.25rem 0.5rem', margin: 0, borderColor: 'var(--accent-primary)', background: 'rgba(59, 130, 246, 0.05)' }}>
-                  <Barcode size={14} className="search-icon" style={{ color: 'var(--accent-primary)', marginRight: '6px' }} />
+              <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                <form onSubmit={handleScan} className="header-search" style={{ width: '145px', padding: '0.2rem 0.45rem', margin: 0, height: '26px', borderColor: 'var(--accent-primary)', background: 'rgba(59, 130, 246, 0.05)' }}>
+                  <Barcode size={13} className="search-icon" style={{ color: 'var(--accent-primary)', marginRight: '5px' }} />
                   <input 
                     ref={inputRef}
                     type="text"
-                    placeholder="Data Entry or Scan..."
+                    placeholder="Scan..."
                     className="search-input"
                     value={barcodeInput}
                     onChange={(e) => setBarcodeInput(e.target.value)}
-                    style={{ fontSize: '0.75rem' }}
+                    style={{ fontSize: '0.72rem' }}
                   />
                 </form>
 
@@ -750,12 +750,13 @@ export default function Dashboard() {
                   value={statusFilter}
                   onChange={(e) => setStatusFilter(e.target.value)}
                   style={{
-                    padding: '0.25rem 0.5rem',
+                    padding: '0.2rem 0.45rem',
+                    height: '26px',
                     borderRadius: '4px',
                     border: '1px solid var(--border-color)',
                     background: 'var(--bg-tertiary)',
                     color: 'var(--text-primary)',
-                    fontSize: '0.75rem',
+                    fontSize: '0.72rem',
                     cursor: 'pointer',
                     outline: 'none'
                   }}
@@ -765,8 +766,8 @@ export default function Dashboard() {
                   <option value="result_not_done">Result Not Done</option>
                   <option value="not_verified">Not Verified</option>
                 </select>
-                <span style={{ color: 'var(--text-secondary)', fontSize: '0.8rem', display: 'flex', alignItems: 'center', gap: '10px' }}>
-                  <span>{filteredSamples.length} {filteredSamples.length !== selectedDeptSamples.length ? `(of ${selectedDeptSamples.length})` : ''} tracked</span>
+                <span style={{ color: 'var(--text-secondary)', fontSize: '0.73rem', display: 'flex', alignItems: 'center', gap: '6px' }}>
+                  <span>{filteredSamples.length} {filteredSamples.length !== selectedDeptSamples.length ? `(${selectedDeptSamples.length})` : ''}</span>
                   {searchQuery && (
                     <span 
                       style={{ 
@@ -986,34 +987,34 @@ export default function Dashboard() {
           </div>
 
           <div className="table-container">
-            <table className="samples-table" style={{ fontSize: '11px' }}>
+            <table className="samples-table" style={{ fontSize: '10px' }}>
               <thead>
                 <tr>
-                  <th style={{ width: '50px', textAlign: 'center' }}>#</th>
-                  <th style={{ width: '100px' }}>Barcode</th>
-                  <th style={{ width: '15%' }}>Patient</th>
-                  <th>Test</th>
-                  <th style={{ width: '85px' }}>Entry Date</th>
-                  <th style={{ width: '85px' }}>Received</th>
-                  <th style={{ width: '85px' }}>Result Time</th>
-                  <th style={{ width: '110px' }}>Status</th>
-                  <th style={{ width: '120px', textAlign: 'center' }}>Actions</th>
-                  <th style={{ width: '70px', textAlign: 'center' }}>Triger</th>
+                  <th style={{ width: '36px', textAlign: 'center' }}>#</th>
+                  <th style={{ width: '85px' }}>Barcode</th>
+                  <th style={{ width: '13%' }}>Patient</th>
+                  <th style={{ minWidth: '150px' }}>Test</th>
+                  <th style={{ width: '70px' }}>Entry Date</th>
+                  <th style={{ width: '70px' }}>Received</th>
+                  <th style={{ width: '70px' }}>Result Time</th>
+                  <th style={{ width: '90px' }}>Status</th>
+                  <th style={{ width: '95px', textAlign: 'center' }}>Actions</th>
+                  <th style={{ width: '55px', textAlign: 'center' }}>Triger</th>
                 </tr>
               </thead>
               <tbody>
                 {filteredSamples.map((sample, index) => (
                   <tr key={sample.id} className={`table-row ${getCardStatusClass(sample)}`}>
-                    <td className="text-secondary" style={{ textAlign: 'center' }}>
+                    <td className="text-secondary" style={{ textAlign: 'center', fontSize: '9.5px' }}>
                       {filteredSamples.length - index}
                     </td>
                     <td>
                       <span className="barcode-badge">{sample.barcode}</span>
                     </td>
-                    <td className="info-value">{sample.patient}</td>
-                    <td className="info-value" style={{ whiteSpace: 'normal', minWidth: '200px' }}>
+                    <td className="info-value" style={{ fontSize: '10px' }}>{sample.patient}</td>
+                    <td className="info-value" style={{ whiteSpace: 'normal' }}>
                       {sample.testDetails && sample.testDetails.length > 0 ? (
-                        <div style={{ display: 'flex', flexWrap: 'wrap', gap: '4px' }}>
+                        <div style={{ display: 'flex', flexWrap: 'wrap', gap: '2px' }}>
                           {sample.testDetails.map((td: any, i: number) => {
                             const ds = (td.status || '').toLowerCase();
                             const isVerified = ds.includes('verified') || ds.includes('approved') || ds.includes('dispatch') || ds.includes('authorized');
@@ -1046,9 +1047,10 @@ export default function Dashboard() {
                                 style={{ 
                                   background: bg,
                                   color: isDone ? 'var(--success)' : 'var(--text-primary)',
-                                  padding: '2px 4px', 
-                                  borderRadius: '3px', 
-                                  fontSize: '9.5px',
+                                  padding: '1px 3px', 
+                                  borderRadius: '2px', 
+                                  fontSize: '9px',
+                                  lineHeight: '1.1',
                                   border: isDone ? '1px solid rgba(16, 185, 129, 0.2)' : '1px solid var(--border-color)',
                                   animation: anim,
                                   cursor: isOverdue ? 'pointer' : 'default'
@@ -1056,7 +1058,7 @@ export default function Dashboard() {
                                 title={td.status}
                               >
                                 {td.name}
-                                {td.delayReason && <span style={{ marginLeft: '4px', fontStyle: 'italic', opacity: 0.8 }}>(Delay: {td.delayReason})</span>}
+                                {td.delayReason && <span style={{ marginLeft: '3px', fontStyle: 'italic', opacity: 0.8 }}>(Delay: {td.delayReason})</span>}
                               </span>
                             );
                           })}
@@ -1095,9 +1097,10 @@ export default function Dashboard() {
                               style={{ 
                                 animation: fallbackAnim,
                                 background: fallbackBg,
-                                padding: sample.isOverdue || fallbackBg !== 'transparent' ? '2px 4px' : '0',
-                                borderRadius: '3px',
-                                fontSize: '9.5px',
+                                padding: sample.isOverdue || fallbackBg !== 'transparent' ? '1px 3px' : '0',
+                                borderRadius: '2px',
+                                fontSize: '9px',
+                                lineHeight: '1.1',
                                 display: 'inline-block',
                                 cursor: sample.isOverdue ? 'pointer' : 'default'
                               }}>
@@ -1107,28 +1110,28 @@ export default function Dashboard() {
                         })()
                       )}
                     </td>
-                    <td className="text-secondary" style={{ fontSize: '10px' }}>
+                    <td className="text-secondary" style={{ fontSize: '9px', lineHeight: '1.05' }}>
                       {sample.entryDate !== '--' ? (
-                        <>
-                          <div style={{ fontWeight: 500, color: 'var(--text-primary)' }}>{sample.entryTime}</div>
-                          <div>{sample.entryDate}</div>
-                        </>
+                        <div style={{ display: 'flex', flexDirection: 'column', lineHeight: '1.05' }}>
+                          <span style={{ fontWeight: 500, color: 'var(--text-primary)', fontSize: '9.5px' }}>{sample.entryTime}</span>
+                          <span style={{ fontSize: '8.5px', opacity: 0.8 }}>{sample.entryDate}</span>
+                        </div>
                       ) : '--'}
                     </td>
-                    <td className="text-secondary" style={{ fontSize: '10px' }}>
+                    <td className="text-secondary" style={{ fontSize: '9px', lineHeight: '1.05' }}>
                       {sample.receivedDate !== '--' ? (
-                        <>
-                          <div style={{ fontWeight: 500, color: 'var(--text-primary)' }}>{sample.receivedTime}</div>
-                          <div>{sample.receivedDate}</div>
-                        </>
+                        <div style={{ display: 'flex', flexDirection: 'column', lineHeight: '1.05' }}>
+                          <span style={{ fontWeight: 500, color: 'var(--text-primary)', fontSize: '9.5px' }}>{sample.receivedTime}</span>
+                          <span style={{ fontSize: '8.5px', opacity: 0.8 }}>{sample.receivedDate}</span>
+                        </div>
                       ) : '--'}
                     </td>
-                    <td className="text-secondary" style={{ fontSize: '10px' }}>
+                    <td className="text-secondary" style={{ fontSize: '9px', lineHeight: '1.05' }}>
                       {sample.resultDate !== '--' ? (
-                        <>
-                          <div style={{ fontWeight: 500, color: 'var(--text-primary)' }}>{sample.resultTime}</div>
-                          <div>{sample.resultDate}</div>
-                        </>
+                        <div style={{ display: 'flex', flexDirection: 'column', lineHeight: '1.05' }}>
+                          <span style={{ fontWeight: 500, color: 'var(--text-primary)', fontSize: '9.5px' }}>{sample.resultTime}</span>
+                          <span style={{ fontSize: '8.5px', opacity: 0.8 }}>{sample.resultDate}</span>
+                        </div>
                       ) : '--'}
                     </td>
                     <td>
@@ -1137,7 +1140,7 @@ export default function Dashboard() {
                       </span>
                     </td>
                     <td style={{ textAlign: 'center' }}>
-                      <div style={{ display: 'flex', justifyContent: 'center', gap: '4px' }}>
+                      <div style={{ display: 'flex', justifyContent: 'center', gap: '3px' }}>
                         <button 
                           onClick={() => toggleSampleMute(sample.id)}
                           disabled={!(sample.status.toLowerCase().includes('collected') || sample.status.toLowerCase().includes('batch generated') || sample.isOverdue)}
@@ -1146,12 +1149,12 @@ export default function Dashboard() {
                             border: 'none', 
                             color: mutedSamples.has(sample.id) ? 'var(--text-secondary)' : 'var(--warning)', 
                             cursor: (sample.status.toLowerCase().includes('collected') || sample.status.toLowerCase().includes('batch generated') || sample.isOverdue) ? 'pointer' : 'default', 
-                            padding: '2px',
+                            padding: '1px',
                             opacity: (sample.status.toLowerCase().includes('collected') || sample.status.toLowerCase().includes('batch generated') || sample.isOverdue) ? 1 : 0.2
                           }}
                           title={mutedSamples.has(sample.id) ? "Unmute Sample" : "Mute Sample"}
                         >
-                          {mutedSamples.has(sample.id) ? <VolumeX size={12} /> : <Volume2 size={12} />}
+                          {mutedSamples.has(sample.id) ? <VolumeX size={11} /> : <Volume2 size={11} />}
                         </button>
                         <button 
                           onClick={() => setReceiveModal(sample.id)}
@@ -1161,26 +1164,26 @@ export default function Dashboard() {
                             border: 'none', 
                             color: 'var(--success)', 
                             cursor: (sample.status.toLowerCase().includes('collected') || sample.status.toLowerCase().includes('batch generated')) ? 'pointer' : 'default', 
-                            padding: '2px',
+                            padding: '1px',
                             opacity: (sample.status.toLowerCase().includes('collected') || sample.status.toLowerCase().includes('batch generated')) ? 1 : 0.2
                           }}
                           title="Mark as Received"
                         >
-                          <CheckCircle size={12} />
+                          <CheckCircle size={11} />
                         </button>
                         <button 
                           onClick={() => handleEdit(sample.id, sample.barcode)}
-                          style={{ background: 'transparent', border: 'none', color: 'var(--accent-primary)', cursor: 'pointer', padding: '2px' }}
+                          style={{ background: 'transparent', border: 'none', color: 'var(--accent-primary)', cursor: 'pointer', padding: '1px' }}
                           title="Edit Barcode"
                         >
-                          <Edit2 size={12} />
+                          <Edit2 size={11} />
                         </button>
                         <button 
                           onClick={() => handleDelete(sample.id)}
-                          style={{ background: 'transparent', border: 'none', color: 'var(--danger)', cursor: 'pointer', padding: '2px' }}
+                          style={{ background: 'transparent', border: 'none', color: 'var(--danger)', cursor: 'pointer', padding: '1px' }}
                           title="Delete Sample"
                         >
-                          <Trash2 size={12} />
+                          <Trash2 size={11} />
                         </button>
                       </div>
                     </td>
@@ -1188,21 +1191,21 @@ export default function Dashboard() {
                       <div style={{ display: 'flex', justifyContent: 'center', gap: '2px' }}>
                         <button 
                           onClick={() => handleFalseTrigger(sample.id, 'trigger')}
-                          style={{ background: 'var(--bg-tertiary)', border: '1px solid var(--border-color)', borderRadius: '3px', padding: '1px 4px', fontSize: '9px', fontWeight: 'bold', cursor: 'pointer' }}
+                          style={{ background: 'var(--bg-tertiary)', border: '1px solid var(--border-color)', borderRadius: '2px', padding: '0px 3px', fontSize: '8px', fontWeight: 'bold', cursor: 'pointer', lineHeight: '1.2' }}
                           title="Trigger Time"
                         >
                           T
                         </button>
                         <button 
                           onClick={() => handleFalseTrigger(sample.id, 'result')}
-                          style={{ background: 'var(--bg-tertiary)', border: '1px solid var(--border-color)', borderRadius: '3px', padding: '1px 4px', fontSize: '9px', fontWeight: 'bold', cursor: 'pointer' }}
+                          style={{ background: 'var(--bg-tertiary)', border: '1px solid var(--border-color)', borderRadius: '2px', padding: '0px 3px', fontSize: '8px', fontWeight: 'bold', cursor: 'pointer', lineHeight: '1.2' }}
                           title="Result Time"
                         >
                           R
                         </button>
                         <button 
                           onClick={() => handleFalseTrigger(sample.id, 'verification')}
-                          style={{ background: 'var(--bg-tertiary)', border: '1px solid var(--border-color)', borderRadius: '3px', padding: '1px 4px', fontSize: '9px', fontWeight: 'bold', cursor: 'pointer' }}
+                          style={{ background: 'var(--bg-tertiary)', border: '1px solid var(--border-color)', borderRadius: '2px', padding: '0px 3px', fontSize: '8px', fontWeight: 'bold', cursor: 'pointer', lineHeight: '1.2' }}
                           title="Verification Time"
                         >
                           V

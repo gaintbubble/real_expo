@@ -17,7 +17,20 @@ export default function Sidebar() {
   const pathname = usePathname();
   const router = useRouter();
   const [isCollapsed, setIsCollapsed] = useState(false);
-  const [userModules, setUserModules] = useState<string[]>([]);
+  const [userModules, setUserModules] = useState<string[]>(() => {
+    if (typeof window !== 'undefined') {
+      try {
+        const stored = localStorage.getItem('nexus_user');
+        if (stored) {
+          const user = JSON.parse(stored);
+          return user.modules || [];
+        }
+      } catch (e) {
+        console.error(e);
+      }
+    }
+    return [];
+  });
 
   useEffect(() => {
     const stored = localStorage.getItem('nexus_user');
@@ -39,6 +52,12 @@ export default function Sidebar() {
     { name: 'Test Config', href: '/test-config', icon: <ClipboardList size={20} /> },
     { name: 'Users', href: '/users', icon: <UserCog size={20} /> },
   ];
+
+  // If user only has access to Dashboard (or no additional modules), do not render/open sidebar
+  const hasOtherModules = userModules.some(item => item !== 'Dashboard');
+  if (!hasOtherModules) {
+    return null;
+  }
 
   const navItems = allNavItems.filter(item => userModules.includes(item.name));
 

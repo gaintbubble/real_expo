@@ -18,13 +18,18 @@ import { changePassword } from '../actions/auth';
 import { useRouter, usePathname } from 'next/navigation';
 import { useSearch } from '../context/SearchContext';
 
-export default function Header() {
+interface HeaderProps {
+  showLogo?: boolean;
+}
+
+export default function Header({ showLogo }: HeaderProps = {}) {
   const router = useRouter();
   const pathname = usePathname();
   const { searchQuery, setSearchQuery, clearSearch } = useSearch();
   const [userName, setUserName] = useState('Guest');
   const [userRole, setUserRole] = useState('Loading...');
   const [currentUser, setCurrentUser] = useState<any>(null);
+  const [internalShowLogo, setInternalShowLogo] = useState(false);
 
   // Dropdown & Modal states
   const [isProfileMenuOpen, setIsProfileMenuOpen] = useState(false);
@@ -53,11 +58,15 @@ export default function Header() {
         setCurrentUser(user);
         setUserName(user.name);
         setUserRole(`@${user.username}`);
+        const mods: string[] = user.modules || [];
+        setInternalShowLogo(!mods.some((m: string) => m !== 'Dashboard'));
       } catch (e) {
         console.error(e);
       }
     }
   }, []);
+
+  const shouldShowLogo = showLogo !== undefined ? showLogo : internalShowLogo;
 
   // Close profile dropdown when clicking outside
   useEffect(() => {
@@ -144,41 +153,54 @@ export default function Header() {
   return (
     <>
       <header className="top-header">
-        <div className="header-search" style={{ position: 'relative', display: 'flex', alignItems: 'center' }}>
-          <Search size={18} className="search-icon" />
-          <input 
-            type="text" 
-            placeholder="Search samples, patients, barcodes, or status..." 
-            className="search-input"
-            value={searchQuery}
-            onChange={(e) => {
-              setSearchQuery(e.target.value);
-              if (pathname !== '/') {
-                router.push('/');
-              }
-            }}
-          />
-          {searchQuery && (
-            <button
-              type="button"
-              onClick={clearSearch}
-              style={{
-                background: 'transparent',
-                border: 'none',
-                color: 'var(--text-secondary)',
-                cursor: 'pointer',
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'center',
-                padding: '2px',
-                marginLeft: '4px',
-                borderRadius: '50%'
-              }}
-              title="Clear search"
+        <div style={{ display: 'flex', alignItems: 'center', gap: '1.25rem', flex: 1, minWidth: 0 }}>
+          {shouldShowLogo && (
+            <div 
+              className="sidebar-logo" 
+              style={{ cursor: 'pointer', flexShrink: 0, userSelect: 'none' }}
+              onClick={() => router.push('/')}
+              title="ASRAM Labs Dashboard"
             >
-              <X size={15} />
-            </button>
+              <div className="logo-icon">AL</div>
+              <span className="logo-text">ASRAM Labs</span>
+            </div>
           )}
+          <div className="header-search" style={{ position: 'relative', display: 'flex', alignItems: 'center' }}>
+            <Search size={18} className="search-icon" />
+            <input 
+              type="text" 
+              placeholder="Search samples, patients, barcodes, or status..." 
+              className="search-input"
+              value={searchQuery}
+              onChange={(e) => {
+                setSearchQuery(e.target.value);
+                if (pathname !== '/') {
+                  router.push('/');
+                }
+              }}
+            />
+            {searchQuery && (
+              <button
+                type="button"
+                onClick={clearSearch}
+                style={{
+                  background: 'transparent',
+                  border: 'none',
+                  color: 'var(--text-secondary)',
+                  cursor: 'pointer',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  padding: '2px',
+                  marginLeft: '4px',
+                  borderRadius: '50%'
+                }}
+                title="Clear search"
+              >
+                <X size={15} />
+              </button>
+            )}
+          </div>
         </div>
         
         <div className="header-actions">
