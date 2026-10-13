@@ -573,7 +573,45 @@ export default function Dashboard() {
     return '';
   };
 
-  const filteredSamples = samples.filter(sample => {
+  const sampleMatchesDate = (sample: Sample) => {
+    if (!selectedDate) return true;
+    const [year, month, day] = selectedDate.split('-').map(Number);
+    const startObj = new Date(year, month - 1, day);
+    startObj.setHours(0, 0, 0, 0);
+    const endObj = new Date(year, month - 1, day);
+    endObj.setHours(23, 59, 59, 999);
+
+    const checkMatch = (dateStr: string) => {
+      if (!dateStr || dateStr === '--') return false;
+      const d = new Date(dateStr);
+      if (isNaN(d.getTime())) return false;
+      d.setHours(12, 0, 0, 0);
+      return d >= startObj && d <= endObj;
+    };
+
+    return checkMatch(sample.receivedDate) || checkMatch(sample.resultDate) || checkMatch(sample.entryDate);
+  };
+
+  // Samples belonging to departments the logged-in user has access to
+  const userAccessibleSamples = samples.filter(sample => {
+    if (user?.username === 'admin') return true;
+    return sample.departments && sample.departments.some(dName => departments.some(dept => dept.name === dName));
+  });
+
+  // Base samples for the selected department tab matching date
+  const selectedDeptSamples = userAccessibleSamples.filter(sample => {
+    const matchesDept = activeTab ? (sample.departments && sample.departments.includes(activeTab)) : true;
+    return matchesDept && sampleMatchesDate(sample);
+  });
+
+  // Count for each department tab for current date
+  const getDeptSampleCount = (deptName: string) => {
+    return userAccessibleSamples.filter(s => 
+      s.departments && s.departments.includes(deptName) && sampleMatchesDate(s)
+    ).length;
+  };
+
+  const filteredSamples = userAccessibleSamples.filter(sample => {
     const query = searchQuery.toLowerCase();
     const matchesSearch = (
       sample.barcode.toLowerCase().includes(query) ||
@@ -582,24 +620,7 @@ export default function Dashboard() {
       sample.status.toLowerCase().includes(query)
     );
     
-    let matchesDate = true;
-    if (selectedDate) {
-      const [year, month, day] = selectedDate.split('-').map(Number);
-      const startObj = new Date(year, month - 1, day);
-      startObj.setHours(0, 0, 0, 0);
-      const endObj = new Date(year, month - 1, day);
-      endObj.setHours(23, 59, 59, 999);
-
-      const checkMatch = (dateStr: string) => {
-        if (!dateStr || dateStr === '--') return false;
-        const d = new Date(dateStr);
-        if (isNaN(d.getTime())) return false;
-        d.setHours(12, 0, 0, 0); // Middle of the day to avoid timezone edge cases
-        return d >= startObj && d <= endObj;
-      };
-
-      matchesDate = checkMatch(sample.receivedDate) || checkMatch(sample.resultDate) || checkMatch(sample.entryDate);
-    }
+    let matchesDate = sampleMatchesDate(sample);
 
     let matchesDepartment = true;
     if (activeTab) {
@@ -634,26 +655,42 @@ export default function Dashboard() {
         <section className="samples-section">
           <div className="section-header" style={{ flexDirection: 'column', alignItems: 'flex-start', gap: '15px' }}>
             <div className="tabs-container" style={{ display: 'flex', gap: '10px', overflowX: 'auto', paddingBottom: '10px', width: '100%', borderBottom: '1px solid var(--border-color)' }}>
-              {departments.map(dept => (
-                <button 
-                  key={dept.id}
-                  onClick={() => setActiveTab(dept.name)}
-                  style={{
-                    padding: '6px 12px',
-                    borderRadius: '4px',
-                    border: 'none',
-                    background: activeTab === dept.name ? 'var(--accent-primary)' : 'var(--bg-tertiary)',
-                    color: activeTab === dept.name ? 'white' : 'var(--text-secondary)',
-                    cursor: 'pointer',
-                    fontWeight: 600,
-                    fontSize: '0.8rem',
-                    transition: 'all 0.2s',
-                    whiteSpace: 'nowrap'
-                  }}
-                >
-                  {dept.name}
-                </button>
-              ))}
+              {departments.map(dept => {
+                const count = getDeptSampleCount(dept.name);
+                return (
+                  <button 
+                    key={dept.id}
+                    onClick={() => setActiveTab(dept.name)}
+                    style={{
+                      padding: '6px 12px',
+                      borderRadius: '4px',
+                      border: 'none',
+                      background: activeTab === dept.name ? 'var(--accent-primary)' : 'var(--bg-tertiary)',
+                      color: activeTab === dept.name ? 'white' : 'var(--text-secondary)',
+                      cursor: 'pointer',
+                      fontWeight: 600,
+                      fontSize: '0.8rem',
+                      transition: 'all 0.2s',
+                      whiteSpace: 'nowrap',
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: '6px'
+                    }}
+                  >
+                    <span>{dept.name}</span>
+                    <span style={{
+                      fontSize: '0.72rem',
+                      padding: '1px 6px',
+                      borderRadius: '10px',
+                      background: activeTab === dept.name ? 'rgba(255, 255, 255, 0.25)' : 'rgba(255, 255, 255, 0.08)',
+                      color: activeTab === dept.name ? '#ffffff' : 'var(--text-secondary)',
+                      fontWeight: 600
+                    }}>
+                      {count}
+                    </span>
+                  </button>
+                );
+              })}
               {departments.length > 1 && (
                 <button
                   onClick={handleSetDefaultDept}
@@ -729,7 +766,7 @@ export default function Dashboard() {
                   <option value="not_verified">Not Verified</option>
                 </select>
                 <span style={{ color: 'var(--text-secondary)', fontSize: '0.8rem', display: 'flex', alignItems: 'center', gap: '10px' }}>
-                  <span>{filteredSamples.length} {filteredSamples.length !== samples.length ? `(of ${samples.length})` : ''} tracked</span>
+                  <span>{filteredSamples.length} {filteredSamples.length !== selectedDeptSamples.length ? `(of ${selectedDeptSamples.length})` : ''} tracked</span>
                   {searchQuery && (
                     <span 
                       style={{ 
