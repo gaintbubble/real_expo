@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server';
 import prisma from '../../../lib/prisma';
+import { parseISTDate } from '../../../lib/dateUtils';
 
 export async function POST(request: Request) {
   try {
@@ -7,15 +8,15 @@ export async function POST(request: Request) {
     
     let receivedTimeValue = undefined;
     if (data.receivedTime) {
-      const parsedDate = new Date(data.receivedTime);
-      if (!isNaN(parsedDate.getTime())) {
+      const parsedDate = parseISTDate(data.receivedTime);
+      if (parsedDate) {
         receivedTimeValue = parsedDate;
       }
     }
     let resultTimeValue = undefined;
     if (data.resultTime) {
-      const parsedResultDate = new Date(data.resultTime);
-      if (!isNaN(parsedResultDate.getTime())) {
+      const parsedResultDate = parseISTDate(data.resultTime);
+      if (parsedResultDate) {
         resultTimeValue = parsedResultDate;
       }
     }

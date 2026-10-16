@@ -6,6 +6,7 @@ import { getDepartments } from './actions/departments';
 import { DatePicker } from './components/DatePicker';
 import { Edit2, Trash2, Barcode, CheckCircle, Volume2, VolumeX, X as XIcon, ChevronDown, Bell } from 'lucide-react';
 import { useSearch } from './context/SearchContext';
+import { formatTimeIST, formatDateIST, getTodayDateIST } from './lib/dateUtils';
 
 interface AlarmTriggers {
   collected: boolean;
@@ -142,8 +143,7 @@ export default function Dashboard() {
   const [user, setUser] = useState<any>(null);
 
   useEffect(() => {
-    const today = new Date();
-    setSelectedDate(`${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}-${String(today.getDate()).padStart(2, '0')}`);
+    setSelectedDate(getTodayDateIST());
     
     const loadDepts = async () => {
       const depts = await getDepartments();
@@ -214,8 +214,9 @@ export default function Dashboard() {
           }
 
           // 2. Result Done (Mins) Monitoring
-          if (s.intervalTime != null && createdAtDate) {
-            const limit = new Date(createdAtDate.getTime() + s.intervalTime * 60000);
+          const baseResultDate = receivedDateObj || createdAtDate;
+          if (s.intervalTime != null && baseResultDate) {
+            const limit = new Date(baseResultDate.getTime() + s.intervalTime * 60000);
             if (now > limit && statusLower.includes('received')) {
               isResultOverdue = true;
             }
@@ -237,12 +238,12 @@ export default function Dashboard() {
             testDetails: s.testDetails ? (() => { try { return JSON.parse(s.testDetails); } catch { return []; } })() : [],
             serviceCd: s.serviceCd || '--',
             status: s.currentStatus,
-            entryDate: s.createdAt ? new Date(s.createdAt).toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' }) : '--',
-            entryTime: s.createdAt ? new Date(s.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : '--',
-            receivedDate: s.receivedTime ? new Date(s.receivedTime).toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' }) : '--',
-            receivedTime: s.receivedTime ? new Date(s.receivedTime).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : '--',
-            resultDate: s.resultTime ? new Date(s.resultTime).toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' }) : '--',
-            resultTime: s.resultTime ? new Date(s.resultTime).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : '--',
+            entryDate: formatDateIST(s.createdAt),
+            entryTime: formatTimeIST(s.createdAt),
+            receivedDate: formatDateIST(s.receivedTime),
+            receivedTime: formatTimeIST(s.receivedTime),
+            resultDate: formatDateIST(s.resultTime),
+            resultTime: formatTimeIST(s.resultTime),
             target: '--',
             delayPercent: 0,
             departments: s.departments || [],
@@ -305,8 +306,8 @@ export default function Dashboard() {
       test: 'Loading...',
       serviceCd: '--',
       status: 'Saving...',
-      entryDate: now.toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' }),
-      entryTime: now.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+      entryDate: formatDateIST(now),
+      entryTime: formatTimeIST(now),
       receivedDate: '--',
       receivedTime: '--',
       resultDate: '--',
@@ -348,12 +349,12 @@ export default function Dashboard() {
           test: ('displayTestName' in response.sample ? (response.sample as { displayTestName?: string }).displayTestName : undefined) || response.sample.testName || 'Waiting...',
           serviceCd: response.sample.serviceCd || '--',
           status: response.sample.currentStatus || 'Pending LIS Search',
-          entryDate: response.sample.createdAt ? new Date(response.sample.createdAt).toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' }) : '--',
-          entryTime: response.sample.createdAt ? new Date(response.sample.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : '--',
-          receivedDate: response.sample.receivedTime ? new Date(response.sample.receivedTime).toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' }) : '--',
-          receivedTime: response.sample.receivedTime ? new Date(response.sample.receivedTime).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : '--',
-          resultDate: response.sample.resultTime ? new Date(response.sample.resultTime).toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' }) : '--',
-          resultTime: response.sample.resultTime ? new Date(response.sample.resultTime).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : '--',
+          entryDate: formatDateIST(response.sample.createdAt),
+          entryTime: formatTimeIST(response.sample.createdAt),
+          receivedDate: formatDateIST(response.sample.receivedTime),
+          receivedTime: formatTimeIST(response.sample.receivedTime),
+          resultDate: formatDateIST(response.sample.resultTime),
+          resultTime: formatTimeIST(response.sample.resultTime),
           target: '--',
           delayPercent: 0,
           departments: ('departments' in response.sample && (response.sample as any).departments.length > 0) ? (response.sample as any).departments : (activeTab ? [activeTab] : []),
@@ -527,8 +528,8 @@ export default function Dashboard() {
       setSamples(prev => prev.map(s => s.id === id ? { 
         ...s, 
         status: res.sample.currentStatus, 
-        receivedDate: res.sample.receivedTime ? new Date(res.sample.receivedTime).toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' }) : '--',
-        receivedTime: res.sample.receivedTime ? new Date(res.sample.receivedTime).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : '--'
+        receivedDate: formatDateIST(res.sample.receivedTime),
+        receivedTime: formatTimeIST(res.sample.receivedTime)
       } : s));
     } else {
       alert(res.message || "Failed to mark as received.");
@@ -549,10 +550,10 @@ export default function Dashboard() {
           return { 
             ...s, 
             status: res.sample.currentStatus, 
-            receivedDate: res.sample.receivedTime ? new Date(res.sample.receivedTime).toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' }) : s.receivedDate,
-            receivedTime: res.sample.receivedTime ? new Date(res.sample.receivedTime).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : s.receivedTime,
-            resultDate: res.sample.resultTime ? new Date(res.sample.resultTime).toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' }) : s.resultDate,
-            resultTime: res.sample.resultTime ? new Date(res.sample.resultTime).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : s.resultTime,
+            receivedDate: res.sample.receivedTime ? formatDateIST(res.sample.receivedTime) : s.receivedDate,
+            receivedTime: res.sample.receivedTime ? formatTimeIST(res.sample.receivedTime) : s.receivedTime,
+            resultDate: res.sample.resultTime ? formatDateIST(res.sample.resultTime) : s.resultDate,
+            resultTime: res.sample.resultTime ? formatTimeIST(res.sample.resultTime) : s.resultTime,
             testDetails: type === 'verification' ? testDetails : s.testDetails
           };
         }
@@ -1192,7 +1193,7 @@ export default function Dashboard() {
                               alignItems: 'center',
                               gap: '2px'
                             }}
-                            title={`Provisional Mode: Checking paused${sample.provisionalExpiry ? ` until ${new Date(sample.provisionalExpiry).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}` : ''}`}
+                            title={`Provisional Mode: Checking paused${sample.provisionalExpiry ? ` until ${formatTimeIST(sample.provisionalExpiry)}` : ''}`}
                           >
                             PROV
                           </span>
@@ -1287,7 +1288,7 @@ export default function Dashboard() {
                             opacity: togglingProvisional === sample.id ? 0.6 : 1
                           }}
                           title={sample.isProvisional 
-                            ? `Provisional ON (checking paused). Click to Turn OFF${sample.provisionalExpiry ? ` (Expires ${new Date(sample.provisionalExpiry).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })})` : ''}` 
+                            ? `Provisional ON (checking paused). Click to Turn OFF${sample.provisionalExpiry ? ` (Expires ${formatTimeIST(sample.provisionalExpiry)})` : ''}` 
                             : `Provisional OFF. Click to Turn ON (Pause checking for ${sample.provisionalTime || 60}m)`}
                         >
                           {sample.isProvisional ? 'P ON' : 'P'}

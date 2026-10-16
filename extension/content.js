@@ -135,12 +135,14 @@ chrome.runtime.onMessage.addListener((message) => {
           const finalServiceCd = serviceCds.length > 0 ? serviceCds.join(', ') : undefined;
 
           // Grab Sample Received Time
-          const receivedElement = document.querySelector('td[data-col="SAMPLE_RECEVING_DT"]');
-          const receivedTimeStr = receivedElement ? receivedElement.innerText.trim() : "";
+          const receivedElements = Array.from(document.querySelectorAll('td[data-col="SAMPLE_RECEVING_DT"]'));
+          const validReceived = receivedElements.map(el => el.innerText.trim()).filter(t => t && t !== '--' && t !== '-');
+          const receivedTimeStr = validReceived.length > 0 ? validReceived[0] : "";
           
-          // Grab Result Time
-          const resultElement = document.querySelector('td[data-col="RESULT_DATE"]');
-          const resultTimeStr = resultElement ? resultElement.innerText.trim() : "";
+          // Grab Result Time (or Verified / Approved Date)
+          const resultElements = Array.from(document.querySelectorAll('td[data-col="RESULT_DATE"], td[data-col="VERIFIED_DATE"], td[data-col="APPROVED_DATE"]'));
+          const validResults = resultElements.map(el => el.innerText.trim()).filter(t => t && t !== '--' && t !== '-');
+          const resultTimeStr = validResults.length > 0 ? validResults[validResults.length - 1] : "";
           
           chrome.runtime.sendMessage({
             action: "UPDATE_STATUS",

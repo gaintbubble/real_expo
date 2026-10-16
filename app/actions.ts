@@ -1,6 +1,7 @@
 "use server";
 
 import prisma from './lib/prisma';
+import { getISTStartAndEndOfDay } from './lib/dateUtils';
 
 export async function saveBarcodeToDatabase(barcode: string, activeTab?: string) {
   try {
@@ -41,9 +42,7 @@ export async function getAllTrackedSamples(dateStr?: string) {
   try {
     let whereClause = {};
     if (dateStr && dateStr !== '--') {
-      const [year, month, day] = dateStr.split('-').map(Number);
-      const startOfDay = new Date(year, month - 1, day, 0, 0, 0);
-      const endOfDay = new Date(year, month - 1, day, 23, 59, 59, 999);
+      const { startOfDay, endOfDay } = getISTStartAndEndOfDay(dateStr);
       whereClause = {
         OR: [
           { createdAt: { gte: startOfDay, lte: endOfDay } },
