@@ -72,7 +72,8 @@ interface Sample {
 
 export function getSampleStageInfo(sample: Sample) {
   const s = (sample.status || '').toLowerCase();
-  const isReceived = sample.receivedDate !== '--' || 
+  const isPreCheck = s.includes('pending check') || s.includes('scanned') || s.includes('waiting');
+  const isReceived = !isPreCheck && (sample.receivedDate !== '--' || 
     s.includes('received') || 
     s.includes('result done') || 
     s.includes('done') || 
@@ -80,7 +81,7 @@ export function getSampleStageInfo(sample: Sample) {
     s.includes('verified') || 
     s.includes('approved') || 
     s.includes('authorized') || 
-    s.includes('dispatch');
+    s.includes('dispatch'));
 
   let isResultDone = false;
   let isResultVerified = false;
@@ -283,7 +284,8 @@ export default function Dashboard() {
         const now = new Date();
 
         const createdAtDate = s.createdAt ? new Date(s.createdAt) : null;
-        const receivedDateObj = s.receivedTime ? new Date(s.receivedTime) : (createdAtDate ? createdAtDate : null);
+        // Result Entry SLA must start ONLY from actual sample_received_timestamp, not scan time
+        const receivedDateObj = s.receivedTime ? new Date(s.receivedTime) : null;
         const resultDateObj = s.resultTime ? new Date(s.resultTime) : null;
         const triggerDelayMins = s.triggerTime || 0;
 
@@ -296,6 +298,7 @@ export default function Dashboard() {
           : 0;
 
         const statusLower = (s.currentStatus || '').toLowerCase();
+        const isPreCheck = statusLower.includes('pending check') || statusLower.includes('scanned') || statusLower.includes('waiting');
 
         // Parse and evaluate individual test SLAs dynamically against persistent timestamps
         const rawTestDetails = s.testDetails ? (() => { try { return JSON.parse(s.testDetails); } catch { return []; } })() : [];
@@ -307,10 +310,11 @@ export default function Dashboard() {
           const isDone = isVerified || ds.includes('done') || ds.includes('completed');
 
           // 1. Result Entry SLA Tracking:
-          // Calculate result entry deadline using sample received timestamp + configured result entry time
+          // Starts ONLY from actual sample_received_timestamp when status transitions to RECEIVED.
+          // NEVER starts prematurely during Pending Check / Scanned pre-check window.
           let isResultOverdue = false;
           let isResultOverdueAfterExtraTime = false;
-          if (receivedDateObj && !isDone) {
+          if (receivedDateObj && !isPreCheck && !isDone) {
             const resultEntryMins = td.intervalTime != null ? td.intervalTime : (s.intervalTime || 30);
             const extraMins = td.extraTime || 0;
             const originalDeadline = new Date(receivedDateObj.getTime() + resultEntryMins * 60000);
@@ -359,7 +363,7 @@ export default function Dashboard() {
         const fallbackIsDone = fallbackIsVerified || statusLower.includes('done') || statusLower.includes('completed');
 
         let fallbackResultOverdue = false;
-        if (testDetails.length === 0 && receivedDateObj && !fallbackIsDone) {
+        if (testDetails.length === 0 && receivedDateObj && !isPreCheck && !fallbackIsDone) {
           const limit = new Date(receivedDateObj.getTime() + (s.intervalTime || 30) * 60000);
           if (now > limit) fallbackResultOverdue = true;
         }
@@ -386,8 +390,8 @@ export default function Dashboard() {
           status: s.currentStatus,
           entryDate: formatDateIST(s.createdAt),
           entryTime: formatTimeIST(s.createdAt),
-          receivedDate: formatDateIST(s.receivedTime),
-          receivedTime: formatTimeIST(s.receivedTime),
+          receivedDate: s.receivedTime ? formatDateIST(s.receivedTime) : '--',
+          receivedTime: s.receivedTime ? formatTimeIST(s.receivedTime) : '--',
           resultDate: formatDateIST(s.resultTime),
           resultTime: formatTimeIST(s.resultTime),
           rawCreatedAt: s.createdAt ? new Date(s.createdAt).toISOString() : null,
@@ -469,31 +473,31 @@ export default function Dashboard() {
       delayMins = 2;
     }
 
-    const defaultTestName = "CBC";
+    const defaultTestName = "Resolving...";
     const defaultTestDetails = [{
       name: defaultTestName,
-      status: "Received",
+      status: "Pending Check",
       intervalTime: 10,
       intervalTimeVerified: 15,
       department: effectiveDept
     }];
 
-    // Step 1: Immediate row creation on dashboard in Received status
+    // Step 1: Immediate row creation on dashboard in Pending Check status
     const optimisticSample: Sample = {
       id: `temp-${Date.now()}`,
       barcode: currentInput,
       patient: "--",
       test: defaultTestName,
       serviceCd: `DEPT:${effectiveDept}`,
-      status: "Received",
+      status: "Pending Check",
       entryDate: formatDateIST(now),
       entryTime: formatTimeIST(now),
-      receivedDate: formatDateIST(now),
-      receivedTime: formatTimeIST(now),
+      receivedDate: '--',
+      receivedTime: '--',
       resultDate: '--',
       resultTime: '--',
       rawCreatedAt: now.toISOString(),
-      rawReceivedTime: now.toISOString(),
+      rawReceivedTime: null,
       rawResultTime: null,
       triggerTime: delayMins,
       triggerTarget: delayMins > 0 ? new Date(now.getTime() + delayMins * 60000).toISOString() : null,
@@ -747,6 +751,7 @@ export default function Dashboard() {
 
   const getStatusClass = (status: string) => {
     const s = status.toLowerCase();
+    if (s.includes('scanned') || s.includes('pending check') || s.includes('waiting')) return 'pending-check';
     if (s.includes('received')) return 'received';
     if (s.includes('pending')) return 'pending';
     if (s.includes('completed') || s.includes('done') || s.includes('verified') || s.includes('approved')) return 'completed';
@@ -874,7 +879,8 @@ export default function Dashboard() {
     let matchesStatusFilter = true;
     if (statusFilter !== 'all') {
       const s = sample.status.toLowerCase();
-      const isReceived = sample.receivedDate !== '--' || s.includes('received') || s.includes('result done') || s.includes('verified');
+      const isPreCheck = s.includes('pending check') || s.includes('scanned') || s.includes('waiting');
+      const isReceived = !isPreCheck && (sample.receivedDate !== '--' || s.includes('received') || s.includes('result done') || s.includes('verified'));
 
       if (statusFilter === 'not_received') {
         matchesStatusFilter = !isReceived;
@@ -1363,6 +1369,28 @@ export default function Dashboard() {
 
                             const canExtend = isResultOverdue || isExtraOverdue || isVerificationOverdue;
 
+                            const isResolving = td.name === 'Resolving...' || td.name === 'Fetching Test...';
+                            if (isResolving) {
+                              return (
+                                <span 
+                                  key={i}
+                                  style={{
+                                    fontStyle: 'italic',
+                                    color: 'var(--text-secondary)',
+                                    display: 'inline-flex',
+                                    alignItems: 'center',
+                                    gap: '3px',
+                                    fontSize: '9px',
+                                    opacity: 0.85
+                                  }}
+                                  title="Test details will be retrieved upon trigger check"
+                                >
+                                  <span>⏳</span>
+                                  <span>Resolving...</span>
+                                </span>
+                              );
+                            }
+
                             return (
                               <span 
                                 key={i} 
@@ -1447,7 +1475,14 @@ export default function Dashboard() {
                                 display: 'inline-block',
                                 cursor: canExtend ? 'pointer' : 'default'
                               }}>
-                              {sample.test}
+                              {sample.test === 'Resolving...' ? (
+                                <span style={{ fontStyle: 'italic', color: 'var(--text-secondary)', display: 'inline-flex', alignItems: 'center', gap: '3px', opacity: 0.85 }}>
+                                  <span>⏳</span>
+                                  <span>Resolving...</span>
+                                </span>
+                              ) : (
+                                sample.test
+                              )}
                             </span>
                           );
                         })()

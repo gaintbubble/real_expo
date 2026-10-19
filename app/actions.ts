@@ -38,36 +38,16 @@ export async function saveBarcodeToDatabase(barcode: string, activeTab?: string)
       triggerDelayMins = 2;
     }
 
-    let defaultTestName = "CBC";
+    let defaultTestName = "Resolving...";
     let serviceCd = `DEPT:${activeDept ? activeDept.name : effectiveDeptName}`;
-    let defaultTestDetails: any[] = [];
-
-    if (activeDept && activeDept.tests && activeDept.tests.length > 0) {
-      const matchedTest = activeDept.tests.find(t => 
-        t.testName.toLowerCase().includes('cbc') || 
-        (t.shortName && t.shortName.toLowerCase().includes('cbc'))
-      ) || activeDept.tests[0];
-
-      defaultTestName = matchedTest.shortName || matchedTest.testName;
-      serviceCd = matchedTest.serviceCd || serviceCd;
-      defaultTestDetails = [{
-        name: matchedTest.shortName || matchedTest.testName,
-        status: "Received",
-        serviceCd: matchedTest.serviceCd,
-        intervalTime: matchedTest.intervalTime || 30,
-        intervalTimeVerified: matchedTest.intervalTimeVerified,
-        department: activeDept.name
-      }];
-    } else {
-      defaultTestDetails = [{
-        name: defaultTestName,
-        status: "Received",
-        serviceCd: undefined,
-        intervalTime: 30,
-        intervalTimeVerified: null,
-        department: effectiveDeptName
-      }];
-    }
+    let defaultTestDetails = [{
+      name: defaultTestName,
+      status: "Pending Check",
+      serviceCd: undefined,
+      intervalTime: 30,
+      intervalTimeVerified: null,
+      department: activeDept ? activeDept.name : effectiveDeptName
+    }];
 
     // Delayed Check: The trigger timer strictly gates the background status check.
     // Trigger time is calculated from the exact scan time.
@@ -76,21 +56,21 @@ export async function saveBarcodeToDatabase(barcode: string, activeTab?: string)
     const sample = await prisma.trackedSample.create({
       data: {
         barcode: barcode,
-        currentStatus: "Received", // Immediate creation in Received status
-        receivedTime: scanTime,    // Sample received timestamp recorded immediately
-        testName: defaultTestName,
+        currentStatus: "Pending Check", // Initial pre-check status while trigger timer counts down
+        receivedTime: null,            // Result Entry SLA will start only when status transitions to Received
+        testName: defaultTestName,     // Placeholder "Resolving..." (no hardcoded CBC)
         patientName: "--",
         serviceCd: serviceCd,
         testDetails: JSON.stringify(defaultTestDetails),
-        createdAt: scanTime,       // Exact scan timestamp
-        nextCheckTime: nextCheckTime // Gated trigger delay for result status check
+        createdAt: scanTime,          // Exact scan timestamp
+        nextCheckTime: nextCheckTime   // Gated trigger delay for status check
       }
     });
 
     await prisma.statusHistory.create({
       data: {
         sampleId: sample.id,
-        status: "Received"
+        status: "Pending Check"
       }
     });
 
@@ -126,6 +106,37 @@ export async function getAllTrackedSamples(dateStr?: string) {
       orderBy: { createdAt: 'desc' },
       take: dateStr ? undefined : 1000
     });
+
+    const now = new Date();
+    // Auto-transition samples whose trigger delay has expired from 'Pending Check' to 'Received'
+    const expiredPending = samples.filter(s =>
+      !s.isCompleted &&
+      (s.currentStatus === 'Pending Check' || s.currentStatus === 'Scanned') &&
+      s.nextCheckTime &&
+      new Date(s.nextCheckTime) <= now
+    );
+
+    if (expiredPending.length > 0) {
+      for (const exp of expiredPending) {
+        const transTime = exp.nextCheckTime || now;
+        await prisma.trackedSample.update({
+          where: { id: exp.id },
+          data: {
+            currentStatus: 'Received',
+            receivedTime: transTime
+          }
+        });
+        await prisma.statusHistory.create({
+          data: {
+            sampleId: exp.id,
+            status: 'Received',
+            timestamp: transTime
+          }
+        });
+        exp.currentStatus = 'Received';
+        exp.receivedTime = transTime;
+      }
+    }
 
     const departmentsList = await prisma.department.findMany();
     const deptMap = new Map(departmentsList.map(d => [d.name.toLowerCase(), { name: d.name, triggerTime: d.triggerTime, provisionalTime: d.provisionalTime }]));
@@ -255,7 +266,7 @@ export async function getAllTrackedSamples(dateStr?: string) {
           minTriggerTime = diffMins;
         }
       }
-      if (minTriggerTime === Infinity && (departments.includes('HAEMATOLOGY') || (s.testName && s.testName.toLowerCase().includes('cbc')))) {
+      if (minTriggerTime === Infinity && departments.includes('HAEMATOLOGY')) {
         minTriggerTime = 2;
       }
 
