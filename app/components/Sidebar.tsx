@@ -13,26 +13,21 @@ import {
   UserCog,
 } from 'lucide-react';
 
-export default function Sidebar() {
+interface SidebarProps {
+  userModules?: string[];
+}
+
+export default function Sidebar({ userModules: propModules }: SidebarProps) {
   const pathname = usePathname();
   const router = useRouter();
   const [isCollapsed, setIsCollapsed] = useState(false);
-  const [userModules, setUserModules] = useState<string[]>(() => {
-    if (typeof window !== 'undefined') {
-      try {
-        const stored = localStorage.getItem('nexus_user');
-        if (stored) {
-          const user = JSON.parse(stored);
-          return user.modules || [];
-        }
-      } catch (e) {
-        console.error(e);
-      }
-    }
-    return [];
-  });
+  const [userModules, setUserModules] = useState<string[]>(propModules || []);
 
   useEffect(() => {
+    if (propModules) {
+      setUserModules(propModules);
+      return;
+    }
     const stored = localStorage.getItem('nexus_user');
     if (stored) {
       try {
@@ -44,7 +39,7 @@ export default function Sidebar() {
     } else {
       router.push('/login');
     }
-  }, [router]);
+  }, [propModules, router]);
 
   const allNavItems = [
     { name: 'Dashboard', href: '/', icon: <LayoutDashboard size={20} /> },

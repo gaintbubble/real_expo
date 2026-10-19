@@ -9,22 +9,11 @@ import { SearchProvider } from "../context/SearchContext";
 export default function AppLayout({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
   const router = useRouter();
-  const [userModules, setUserModules] = useState<string[]>(() => {
-    if (typeof window !== 'undefined') {
-      try {
-        const stored = localStorage.getItem('nexus_user');
-        if (stored) {
-          const user = JSON.parse(stored);
-          return user.modules || [];
-        }
-      } catch (e) {
-        console.error(e);
-      }
-    }
-    return [];
-  });
+  const [mounted, setMounted] = useState(false);
+  const [userModules, setUserModules] = useState<string[]>([]);
 
   useEffect(() => {
+    setMounted(true);
     if (pathname === '/login') return;
 
     const stored = localStorage.getItem('nexus_user');
@@ -57,12 +46,13 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
     return <>{children}</>;
   }
 
-  const hasOtherModules = userModules.some(item => item !== 'Dashboard');
+  // Only evaluate client-specific module access after mounting to avoid SSR hydration mismatches
+  const hasOtherModules = mounted && userModules.some(item => item !== 'Dashboard');
 
   return (
     <SearchProvider>
       <div className="app-layout">
-        {hasOtherModules && <Sidebar />}
+        {hasOtherModules && <Sidebar userModules={userModules} />}
         <div className="main-wrapper">
           <Header showLogo={!hasOtherModules} />
           <main className="main-content">

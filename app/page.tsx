@@ -67,23 +67,19 @@ export default function Dashboard() {
   const [barcodeInput, setBarcodeInput] = useState('');
   const { searchQuery, clearSearch } = useSearch();
   const [statusFilter, setStatusFilter] = useState<string>('all');
-  const [selectedDate, setSelectedDate] = useState<string>(() => {
-    const d = new Date();
-    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
-  });
+  const [selectedDate, setSelectedDate] = useState<string>(() => getTodayDateIST());
   const [isScanning, setIsScanning] = useState(false);
   const [isMuted, setIsMuted] = useState(false); // Default Alarm ON on login
-  const [alarmTriggers, setAlarmTriggers] = useState<AlarmTriggers>(() => {
-    if (typeof window !== 'undefined') {
-      const saved = localStorage.getItem('nexus_alarm_triggers');
-      if (saved) {
-        try {
-          return { ...DEFAULT_ALARM_TRIGGERS, ...JSON.parse(saved) };
-        } catch (e) {}
-      }
+  const [alarmTriggers, setAlarmTriggers] = useState<AlarmTriggers>(DEFAULT_ALARM_TRIGGERS);
+
+  useEffect(() => {
+    const saved = localStorage.getItem('nexus_alarm_triggers');
+    if (saved) {
+      try {
+        setAlarmTriggers({ ...DEFAULT_ALARM_TRIGGERS, ...JSON.parse(saved) });
+      } catch (e) {}
     }
-    return DEFAULT_ALARM_TRIGGERS;
-  });
+  }, []);
   const [isAlarmDropdownOpen, setIsAlarmDropdownOpen] = useState(false);
   const alarmDropdownRef = useRef<HTMLDivElement>(null);
 
