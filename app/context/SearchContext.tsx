@@ -3,6 +3,7 @@
 import React, { createContext, useContext, useState } from 'react';
 
 export type PendingFilterType = 'all' | 'result_done' | 'result_verified' | 'result_approval';
+export type PendingDelayMode = 'all' | 'delay';
 
 export interface PendingCounts {
   resultDonePending: number;
@@ -19,6 +20,8 @@ interface SearchContextType {
   clearSearch: () => void;
   pendingFilter: PendingFilterType;
   setPendingFilter: (filter: PendingFilterType) => void;
+  pendingDelayMode: PendingDelayMode;
+  setPendingDelayMode: (mode: PendingDelayMode) => void;
   pendingCounts: PendingCounts;
   setPendingCounts: (counts: PendingCounts) => void;
 }
@@ -38,6 +41,8 @@ const SearchContext = createContext<SearchContextType>({
   clearSearch: () => {},
   pendingFilter: 'all',
   setPendingFilter: () => {},
+  pendingDelayMode: 'all',
+  setPendingDelayMode: () => {},
   pendingCounts: DEFAULT_PENDING_COUNTS,
   setPendingCounts: () => {},
 });
@@ -45,6 +50,7 @@ const SearchContext = createContext<SearchContextType>({
 export const SearchProvider = ({ children }: { children: React.ReactNode }) => {
   const [searchQuery, setSearchQuery] = useState('');
   const [pendingFilter, setPendingFilter] = useState<PendingFilterType>('all');
+  const [pendingDelayMode, setPendingDelayMode] = useState<PendingDelayMode>('all');
   const [pendingCounts, setPendingCounts] = useState<PendingCounts>(DEFAULT_PENDING_COUNTS);
 
   const clearSearch = () => setSearchQuery('');
@@ -57,6 +63,8 @@ export const SearchProvider = ({ children }: { children: React.ReactNode }) => {
         clearSearch,
         pendingFilter,
         setPendingFilter,
+        pendingDelayMode,
+        setPendingDelayMode,
         pendingCounts,
         setPendingCounts
       }}

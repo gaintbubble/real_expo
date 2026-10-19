@@ -24,7 +24,7 @@ interface HeaderProps {
 export default function Header({ showLogo }: HeaderProps = {}) {
   const router = useRouter();
   const pathname = usePathname();
-  const { pendingFilter, setPendingFilter, pendingCounts } = useSearch();
+  const { pendingFilter, setPendingFilter, pendingCounts, pendingDelayMode, setPendingDelayMode } = useSearch();
   const [userName, setUserName] = useState('Guest');
   const [userRole, setUserRole] = useState('Loading...');
   const [currentUser, setCurrentUser] = useState<any>(null);
@@ -268,6 +268,73 @@ export default function Header({ showLogo }: HeaderProps = {}) {
                 </div>
               );
             })}
+
+            {/* Divider */}
+            <div style={{ width: '1px', height: '18px', background: 'var(--border-color)', margin: '0 2px', flexShrink: 0 }} />
+
+            {/* Small Filter: 1. All  2. Delay */}
+            <div 
+              style={{
+                display: 'inline-flex',
+                alignItems: 'center',
+                background: 'var(--bg-tertiary)',
+                border: '1px solid var(--border-color)',
+                borderRadius: '5px',
+                padding: '2px',
+                gap: '2px',
+                flexShrink: 0,
+              }}
+              title="Filter mode: All vs Delay"
+            >
+              <button
+                type="button"
+                onClick={() => setPendingDelayMode('all')}
+                style={{
+                  padding: '2px 8px',
+                  fontSize: '0.7rem',
+                  fontWeight: pendingDelayMode === 'all' ? 600 : 500,
+                  borderRadius: '4px',
+                  border: 'none',
+                  background: pendingDelayMode === 'all' ? 'var(--accent-primary)' : 'transparent',
+                  color: pendingDelayMode === 'all' ? '#ffffff' : 'var(--text-secondary)',
+                  cursor: 'pointer',
+                  transition: 'all 0.15s ease',
+                  whiteSpace: 'nowrap',
+                  lineHeight: 1.2
+                }}
+              >
+                All
+              </button>
+              <button
+                type="button"
+                onClick={() => setPendingDelayMode('delay')}
+                style={{
+                  padding: '2px 8px',
+                  fontSize: '0.7rem',
+                  fontWeight: pendingDelayMode === 'delay' ? 600 : 500,
+                  borderRadius: '4px',
+                  border: 'none',
+                  background: pendingDelayMode === 'delay' ? '#ef4444' : 'transparent',
+                  color: pendingDelayMode === 'delay' ? '#ffffff' : 'var(--text-secondary)',
+                  cursor: 'pointer',
+                  transition: 'all 0.15s ease',
+                  whiteSpace: 'nowrap',
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '4px',
+                  lineHeight: 1.2
+                }}
+              >
+                <span style={{
+                  width: '5px',
+                  height: '5px',
+                  borderRadius: '50%',
+                  background: pendingDelayMode === 'delay' ? '#ffffff' : '#ef4444',
+                  display: 'inline-block'
+                }} />
+                Delay
+              </button>
+            </div>
           </div>
         </div>
         

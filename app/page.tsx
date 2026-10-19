@@ -147,7 +147,7 @@ export function getSampleStageInfo(sample: Sample) {
 export default function Dashboard() {
   const [samples, setSamples] = useState<Sample[]>([]);
   const [barcodeInput, setBarcodeInput] = useState('');
-  const { searchQuery, setSearchQuery, clearSearch, pendingFilter, setPendingFilter, setPendingCounts } = useSearch();
+  const { searchQuery, setSearchQuery, clearSearch, pendingFilter, setPendingFilter, setPendingCounts, pendingDelayMode, setPendingDelayMode } = useSearch();
   const [statusFilter, setStatusFilter] = useState<string>('all');
   const [selectedDate, setSelectedDate] = useState<string>(() => getTodayDateIST());
   const [isScanning, setIsScanning] = useState(false);
