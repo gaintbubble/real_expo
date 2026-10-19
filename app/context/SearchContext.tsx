@@ -41,7 +41,7 @@ const SearchContext = createContext<SearchContextType>({
   clearSearch: () => {},
   pendingFilter: 'all',
   setPendingFilter: () => {},
-  pendingDelayMode: 'all',
+  pendingDelayMode: 'delay',
   setPendingDelayMode: () => {},
   pendingCounts: DEFAULT_PENDING_COUNTS,
   setPendingCounts: () => {},
@@ -50,7 +50,7 @@ const SearchContext = createContext<SearchContextType>({
 export const SearchProvider = ({ children }: { children: React.ReactNode }) => {
   const [searchQuery, setSearchQuery] = useState('');
   const [pendingFilter, setPendingFilter] = useState<PendingFilterType>('all');
-  const [pendingDelayMode, setPendingDelayMode] = useState<PendingDelayMode>('all');
+  const [pendingDelayMode, setPendingDelayMode] = useState<PendingDelayMode>('delay');
   const [pendingCounts, setPendingCounts] = useState<PendingCounts>(DEFAULT_PENDING_COUNTS);
 
   const clearSearch = () => setSearchQuery('');
