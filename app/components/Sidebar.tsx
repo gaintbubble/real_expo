@@ -42,10 +42,10 @@ export default function Sidebar({ userModules: propModules }: SidebarProps) {
   }, [propModules, router]);
 
   const allNavItems = [
-    { name: 'Dashboard', href: '/', icon: <LayoutDashboard size={20} /> },
-    { name: 'Departments', href: '/departments', icon: <Building2 size={20} /> },
-    { name: 'Test Config', href: '/test-config', icon: <ClipboardList size={20} /> },
-    { name: 'Users', href: '/users', icon: <UserCog size={20} /> },
+    { name: 'Dashboard', href: '/', icon: <LayoutDashboard size={15} /> },
+    { name: 'Departments', href: '/departments', icon: <Building2 size={15} /> },
+    { name: 'Test Config', href: '/test-config', icon: <ClipboardList size={15} /> },
+    { name: 'Users', href: '/users', icon: <UserCog size={15} /> },
   ];
 
   // If user only has access to Dashboard (or no additional modules), do not render/open sidebar
@@ -68,7 +68,7 @@ export default function Sidebar({ userModules: propModules }: SidebarProps) {
             className="collapse-btn"
             onClick={() => setIsCollapsed(!isCollapsed)}
           >
-            {isCollapsed ? <ChevronRight size={18} /> : <ChevronLeft size={18} />}
+            {isCollapsed ? <ChevronRight size={14} /> : <ChevronLeft size={14} />}
           </button>
         </div>
 
@@ -98,7 +98,7 @@ export default function Sidebar({ userModules: propModules }: SidebarProps) {
             className="nav-link logout" 
             onClick={() => localStorage.removeItem('nexus_user')}
           >
-            <span className="nav-icon"><LogOut size={20} /></span>
+            <span className="nav-icon"><LogOut size={15} /></span>
             {!isCollapsed && <span className="nav-text">Logout</span>}
           </Link>
         </div>
