@@ -4,7 +4,7 @@ import React, { useState, useRef, useEffect } from 'react';
 import { saveBarcodeToDatabase, getAllTrackedSamples, clearAllSamples, deleteSample, updateSampleBarcode, markSampleReceived, extendSampleTime, simulateFalseTrigger, toggleSampleProvisional } from './actions';
 import { getDepartments } from './actions/departments';
 import { DatePicker } from './components/DatePicker';
-import { Edit2, Trash2, Barcode, CheckCircle, Volume2, VolumeX, X as XIcon, ChevronDown, Bell } from 'lucide-react';
+import { Edit2, Trash2, Barcode, CheckCircle, Volume2, VolumeX, X as XIcon, ChevronDown, Bell, Search } from 'lucide-react';
 import { useSearch } from './context/SearchContext';
 import { formatTimeIST, formatDateIST, getTodayDateIST } from './lib/dateUtils';
 
@@ -65,7 +65,7 @@ interface Sample {
 export default function Dashboard() {
   const [samples, setSamples] = useState<Sample[]>([]);
   const [barcodeInput, setBarcodeInput] = useState('');
-  const { searchQuery, clearSearch } = useSearch();
+  const { searchQuery, setSearchQuery, clearSearch } = useSearch();
   const [statusFilter, setStatusFilter] = useState<string>('all');
   const [selectedDate, setSelectedDate] = useState<string>(() => getTodayDateIST());
   const [isScanning, setIsScanning] = useState(false);
@@ -752,16 +752,28 @@ export default function Dashboard() {
               )}
             </div>
 
-            <div style={{ display: 'flex', justifyContent: 'space-between', width: '100%', alignItems: 'center' }}>
-              <h2 className="section-title" style={{ fontSize: '0.95rem' }}>
-                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                  <rect x="3" y="4" width="18" height="18" rx="2" ry="2"></rect>
-                  <line x1="16" y1="2" x2="16" y2="6"></line>
-                  <line x1="8" y1="2" x2="8" y2="6"></line>
-                  <line x1="3" y1="10" x2="21" y2="10"></line>
-                </svg>
-                Dashboard Data
-              </h2>
+            <div style={{ display: 'flex', justifyContent: 'space-between', width: '100%', alignItems: 'center', gap: '8px' }}>
+              <div className="header-search" style={{ width: '235px', padding: '0.2rem 0.5rem', margin: 0, height: '26px', display: 'flex', alignItems: 'center', position: 'relative' }}>
+                <Search size={13} className="search-icon" style={{ color: 'var(--text-secondary)', marginRight: '6px', flexShrink: 0 }} />
+                <input 
+                  type="text" 
+                  placeholder="Search samples, patients, barcodes..." 
+                  className="search-input"
+                  value={searchQuery}
+                  onChange={(e) => setSearchQuery(e.target.value)}
+                  style={{ fontSize: '0.72rem', width: '100%' }}
+                />
+                {searchQuery && (
+                  <button 
+                    onClick={clearSearch} 
+                    type="button"
+                    style={{ background: 'transparent', border: 'none', color: 'var(--text-secondary)', cursor: 'pointer', display: 'flex', alignItems: 'center', padding: '1px', marginLeft: '2px' }}
+                    title="Clear search"
+                  >
+                    <XIcon size={12} />
+                  </button>
+                )}
+              </div>
               <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
                 <form onSubmit={handleScan} className="header-search" style={{ width: '145px', padding: '0.2rem 0.45rem', margin: 0, height: '26px', borderColor: 'var(--accent-primary)', background: 'rgba(59, 130, 246, 0.05)' }}>
                   <Barcode size={13} className="search-icon" style={{ color: 'var(--accent-primary)', marginRight: '5px' }} />
@@ -803,31 +815,6 @@ export default function Dashboard() {
                 </select>
                 <span style={{ color: 'var(--text-secondary)', fontSize: '0.73rem', display: 'flex', alignItems: 'center', gap: '6px' }}>
                   <span>{filteredSamples.length} {filteredSamples.length !== selectedDeptSamples.length ? `(${selectedDeptSamples.length})` : ''}</span>
-                  {searchQuery && (
-                    <span 
-                      style={{ 
-                        display: 'inline-flex', 
-                        alignItems: 'center', 
-                        gap: '4px', 
-                        padding: '2px 8px', 
-                        borderRadius: '12px', 
-                        background: 'rgba(59, 130, 246, 0.15)', 
-                        color: 'var(--accent-primary)', 
-                        fontSize: '0.72rem',
-                        fontWeight: 600
-                      }}
-                      title="Active search filter from header"
-                    >
-                      <span>Filtered: "{searchQuery}"</span>
-                      <button 
-                        onClick={clearSearch} 
-                        style={{ background: 'transparent', border: 'none', color: 'inherit', cursor: 'pointer', display: 'flex', alignItems: 'center', padding: 0 }}
-                        title="Clear search"
-                      >
-                        <XIcon size={11} />
-                      </button>
-                    </span>
-                  )}
                   {/* Alarm Control with Customizable Dropdown */}
                   <div ref={alarmDropdownRef} style={{ position: 'relative', display: 'inline-flex' }}>
                     <div style={{ 

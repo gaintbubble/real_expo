@@ -2,7 +2,6 @@
 
 import React, { useState, useEffect, useRef } from 'react';
 import { 
-  Search, 
   User, 
   Key, 
   Eye, 
@@ -16,7 +15,6 @@ import {
 } from 'lucide-react';
 import { changePassword } from '../actions/auth';
 import { useRouter, usePathname } from 'next/navigation';
-import { useSearch } from '../context/SearchContext';
 
 interface HeaderProps {
   showLogo?: boolean;
@@ -25,7 +23,6 @@ interface HeaderProps {
 export default function Header({ showLogo }: HeaderProps = {}) {
   const router = useRouter();
   const pathname = usePathname();
-  const { searchQuery, setSearchQuery, clearSearch } = useSearch();
   const [userName, setUserName] = useState('Guest');
   const [userRole, setUserRole] = useState('Loading...');
   const [currentUser, setCurrentUser] = useState<any>(null);
@@ -165,42 +162,6 @@ export default function Header({ showLogo }: HeaderProps = {}) {
               <span className="logo-text">ASRAM Labs</span>
             </div>
           )}
-          <div className="header-search" style={{ position: 'relative', display: 'flex', alignItems: 'center' }}>
-            <Search size={18} className="search-icon" />
-            <input 
-              type="text" 
-              placeholder="Search samples, patients, barcodes, or status..." 
-              className="search-input"
-              value={searchQuery}
-              onChange={(e) => {
-                setSearchQuery(e.target.value);
-                if (pathname !== '/') {
-                  router.push('/');
-                }
-              }}
-            />
-            {searchQuery && (
-              <button
-                type="button"
-                onClick={clearSearch}
-                style={{
-                  background: 'transparent',
-                  border: 'none',
-                  color: 'var(--text-secondary)',
-                  cursor: 'pointer',
-                  display: 'flex',
-                  alignItems: 'center',
-                  justifyContent: 'center',
-                  padding: '2px',
-                  marginLeft: '4px',
-                  borderRadius: '50%'
-                }}
-                title="Clear search"
-              >
-                <X size={15} />
-              </button>
-            )}
-          </div>
         </div>
         
         <div className="header-actions">
