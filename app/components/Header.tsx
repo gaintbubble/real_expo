@@ -15,6 +15,7 @@ import {
 } from 'lucide-react';
 import { changePassword } from '../actions/auth';
 import { useRouter, usePathname } from 'next/navigation';
+import { useSearch } from '../context/SearchContext';
 
 interface HeaderProps {
   showLogo?: boolean;
@@ -23,10 +24,50 @@ interface HeaderProps {
 export default function Header({ showLogo }: HeaderProps = {}) {
   const router = useRouter();
   const pathname = usePathname();
+  const { pendingFilter, setPendingFilter, pendingCounts } = useSearch();
   const [userName, setUserName] = useState('Guest');
   const [userRole, setUserRole] = useState('Loading...');
   const [currentUser, setCurrentUser] = useState<any>(null);
   const [internalShowLogo, setInternalShowLogo] = useState(false);
+
+  const statusBars = [
+    {
+      id: 'result_done' as const,
+      label: 'Result Done',
+      pending: pendingCounts.resultDonePending,
+      total: pendingCounts.resultDoneTotal,
+      color: '#f59e0b',
+      bgColor: 'rgba(245, 158, 11, 0.08)',
+      borderColor: 'rgba(245, 158, 11, 0.25)',
+      activeBorder: '#f59e0b',
+      activeBg: 'rgba(245, 158, 11, 0.18)',
+      activeGlow: '0 0 10px rgba(245, 158, 11, 0.35)',
+    },
+    {
+      id: 'result_verified' as const,
+      label: 'Result Verified',
+      pending: pendingCounts.resultVerifiedPending,
+      total: pendingCounts.resultVerifiedTotal,
+      color: '#a855f7',
+      bgColor: 'rgba(168, 85, 247, 0.08)',
+      borderColor: 'rgba(168, 85, 247, 0.25)',
+      activeBorder: '#a855f7',
+      activeBg: 'rgba(168, 85, 247, 0.18)',
+      activeGlow: '0 0 10px rgba(168, 85, 247, 0.35)',
+    },
+    {
+      id: 'result_approval' as const,
+      label: 'Result Approval',
+      pending: pendingCounts.resultApprovalPending,
+      total: pendingCounts.resultApprovalTotal,
+      color: '#06b6d4',
+      bgColor: 'rgba(6, 182, 212, 0.08)',
+      borderColor: 'rgba(6, 182, 212, 0.25)',
+      activeBorder: '#06b6d4',
+      activeBg: 'rgba(6, 182, 212, 0.18)',
+      activeGlow: '0 0 10px rgba(6, 182, 212, 0.35)',
+    },
+  ];
 
   // Dropdown & Modal states
   const [isProfileMenuOpen, setIsProfileMenuOpen] = useState(false);
@@ -162,6 +203,72 @@ export default function Header({ showLogo }: HeaderProps = {}) {
               <span className="logo-text">ASRAM Labs</span>
             </div>
           )}
+
+          {/* Pending Status Bars */}
+          <div style={{ display: 'flex', alignItems: 'center', gap: '8px', overflowX: 'auto', padding: '2px 0' }}>
+            {statusBars.map(bar => {
+              const isActive = pendingFilter === bar.id;
+              const completionPct = bar.total > 0 ? Math.max(0, Math.min(100, Math.round(((bar.total - bar.pending) / bar.total) * 100))) : 100;
+              
+              return (
+                <div
+                  key={bar.id}
+                  onClick={() => {
+                    if (pathname !== '/') router.push('/');
+                    setPendingFilter(isActive ? 'all' : bar.id);
+                  }}
+                  style={{
+                    display: 'flex',
+                    flexDirection: 'column',
+                    justifyContent: 'center',
+                    gap: '2px',
+                    padding: '3px 8px',
+                    borderRadius: '5px',
+                    cursor: 'pointer',
+                    background: isActive ? bar.activeBg : bar.bgColor,
+                    border: `1px solid ${isActive ? bar.activeBorder : bar.borderColor}`,
+                    boxShadow: isActive ? bar.activeGlow : 'none',
+                    transition: 'all 0.2s ease',
+                    userSelect: 'none',
+                    minWidth: '125px',
+                  }}
+                  title={`Click to ${isActive ? 'clear filter' : 'filter'}: Showing ${bar.pending} pending of ${bar.total} ${bar.label}`}
+                >
+                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '5px', fontSize: '0.72rem', lineHeight: 1.1 }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
+                      <span style={{ 
+                        width: '6px', 
+                        height: '6px', 
+                        borderRadius: '50%', 
+                        background: bar.color, 
+                        display: 'inline-block',
+                        boxShadow: isActive ? `0 0 6px ${bar.color}` : 'none'
+                      }} />
+                      <span style={{ fontWeight: 600, color: 'var(--text-primary)', letterSpacing: '0.1px', whiteSpace: 'nowrap' }}>
+                        {bar.label}
+                      </span>
+                    </div>
+                    <span style={{ fontWeight: 700, fontSize: '0.73rem', color: bar.pending > 0 ? bar.color : 'var(--text-secondary)', whiteSpace: 'nowrap' }}>
+                      ({bar.pending}/{bar.total})
+                    </span>
+                  </div>
+                  
+                  {/* Mini progress bar */}
+                  <div style={{ width: '100%', height: '3px', background: 'rgba(255, 255, 255, 0.08)', borderRadius: '2px', overflow: 'hidden' }}>
+                    <div 
+                      style={{ 
+                        width: `${completionPct}%`, 
+                        height: '100%', 
+                        background: bar.color,
+                        borderRadius: '2px',
+                        transition: 'width 0.4s ease'
+                      }} 
+                    />
+                  </div>
+                </div>
+              );
+            })}
+          </div>
         </div>
         
         <div className="header-actions">

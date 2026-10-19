@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState, useRef, useEffect } from 'react';
+import React, { useState, useRef, useEffect, useMemo, useCallback } from 'react';
 import { saveBarcodeToDatabase, getAllTrackedSamples, clearAllSamples, deleteSample, updateSampleBarcode, markSampleReceived, extendSampleTime, simulateFalseTrigger, toggleSampleProvisional } from './actions';
 import { getDepartments } from './actions/departments';
 import { DatePicker } from './components/DatePicker';
@@ -62,10 +62,92 @@ interface Sample {
   provisionalExpiry?: string | null;
 }
 
+export function getSampleStageInfo(sample: Sample) {
+  const s = (sample.status || '').toLowerCase();
+  const isReceived = sample.receivedDate !== '--' || 
+    s.includes('received') || 
+    s.includes('result done') || 
+    s.includes('done') || 
+    s.includes('completed') || 
+    s.includes('verified') || 
+    s.includes('approved') || 
+    s.includes('authorized') || 
+    s.includes('dispatch');
+
+  let isResultDone = false;
+  let isResultVerified = false;
+  let isResultApproved = false;
+
+  let hasPendingResultTest = false;
+  let hasPendingVerificationTest = false;
+  let hasPendingApprovalTest = false;
+
+  if (sample.testDetails && sample.testDetails.length > 0) {
+    let allDone = true;
+    let allVerified = true;
+    let allApproved = true;
+
+    for (const td of sample.testDetails) {
+      const ds = (td.status || '').toLowerCase();
+      const testApproved = ds.includes('approved') || ds.includes('authorized') || ds.includes('dispatch') || ds.includes('print');
+      const testVerified = testApproved || ds.includes('verified');
+      const testDone = testVerified || ds.includes('done') || ds.includes('completed') || ds.includes('entered');
+
+      if (!testDone) {
+        allDone = false;
+        hasPendingResultTest = true;
+      }
+      if (!testVerified) {
+        allVerified = false;
+        if (testDone) {
+          hasPendingVerificationTest = true;
+        }
+      }
+      if (!testApproved) {
+        allApproved = false;
+        if (testVerified || testDone) {
+          hasPendingApprovalTest = true;
+        }
+      }
+    }
+
+    const fallbackApproved = s.includes('approved') || s.includes('authorized') || s.includes('dispatch') || s.includes('print');
+    const fallbackVerified = fallbackApproved || s.includes('verified');
+    const fallbackDone = fallbackVerified || s.includes('result done') || s.includes('done') || s.includes('completed') || s.includes('entered');
+
+    isResultApproved = allApproved || fallbackApproved;
+    isResultVerified = isResultApproved || allVerified || fallbackVerified;
+    isResultDone = isResultVerified || allDone || fallbackDone;
+  } else {
+    isResultApproved = s.includes('approved') || s.includes('authorized') || s.includes('dispatch') || s.includes('print');
+    isResultVerified = isResultApproved || s.includes('verified');
+    isResultDone = isResultVerified || s.includes('result done') || s.includes('done') || s.includes('completed') || s.includes('entered');
+  }
+
+  // 1. Result Done pending: sample has not finished result entry
+  const needsResultDone = !isResultDone;
+
+  // 2. Result Verified pending: results are completed or available for verification, but verification is not yet completed
+  const needsResultVerified = !isResultVerified && (isResultDone || hasPendingVerificationTest);
+
+  // 3. Result Approval pending: verified (or done) but not yet approved
+  const needsResultApproval = !isResultApproved && (isResultVerified || hasPendingApprovalTest || (isResultDone && !hasPendingResultTest));
+
+  return {
+    isReceived,
+    isResultDone,
+    isResultVerified,
+    isResultApproved,
+    needsResultDone,
+    needsResultVerified,
+    needsResultApproval,
+  };
+}
+
 export default function Dashboard() {
   const [samples, setSamples] = useState<Sample[]>([]);
   const [barcodeInput, setBarcodeInput] = useState('');
-  const { searchQuery, setSearchQuery, clearSearch } = useSearch();
+  const { searchQuery, setSearchQuery, clearSearch, pendingFilter, setPendingFilter, setPendingCounts } = useSearch();
   const [statusFilter, setStatusFilter] = useState<string>('all');
   const [selectedDate, setSelectedDate] = useState<string>(() => getTodayDateIST());
   const [isScanning, setIsScanning] = useState(false);
@@ -605,7 +687,7 @@ export default function Dashboard() {
     return '';
   };
 
-  const sampleMatchesDate = (sample: Sample) => {
+  const sampleMatchesDate = useCallback((sample: Sample) => {
     if (!selectedDate) return true;
     const [year, month, day] = selectedDate.split('-').map(Number);
     const startObj = new Date(year, month - 1, day);
@@ -622,19 +704,62 @@ export default function Dashboard() {
     };
 
     return checkMatch(sample.receivedDate) || checkMatch(sample.resultDate) || checkMatch(sample.entryDate);
-  };
+  }, [selectedDate]);
 
   // Samples belonging to departments the logged-in user has access to
-  const userAccessibleSamples = samples.filter(sample => {
-    if (user?.username === 'admin') return true;
-    return sample.departments && sample.departments.some(dName => departments.some(dept => dept.name === dName));
-  });
+  const userAccessibleSamples = useMemo(() => {
+    return samples.filter(sample => {
+      if (user?.username === 'admin') return true;
+      return sample.departments && sample.departments.some(dName => departments.some(dept => dept.name === dName));
+    });
+  }, [samples, user, departments]);
 
   // Base samples for the selected department tab matching date
-  const selectedDeptSamples = userAccessibleSamples.filter(sample => {
-    const matchesDept = activeTab ? (sample.departments && sample.departments.includes(activeTab)) : true;
-    return matchesDept && sampleMatchesDate(sample);
-  });
+  const selectedDeptSamples = useMemo(() => {
+    return userAccessibleSamples.filter(sample => {
+      const matchesDept = activeTab ? (sample.departments && sample.departments.includes(activeTab)) : true;
+      return matchesDept && sampleMatchesDate(sample);
+    });
+  }, [userAccessibleSamples, activeTab, sampleMatchesDate]);
+
+  // Update pending counts for header status bars whenever current department samples change
+  useEffect(() => {
+    let resultDonePending = 0;
+    let resultDoneTotal = selectedDeptSamples.length;
+
+    let resultVerifiedPending = 0;
+    let resultVerifiedTotal = selectedDeptSamples.length;
+
+    let resultApprovalPending = 0;
+    let approvalEligibleCount = 0;
+
+    selectedDeptSamples.forEach(sample => {
+      const stage = getSampleStageInfo(sample);
+      if (stage.needsResultDone) {
+        resultDonePending++;
+      }
+      if (stage.needsResultVerified) {
+        resultVerifiedPending++;
+      }
+      if (stage.needsResultApproval) {
+        resultApprovalPending++;
+      }
+      if (stage.isResultVerified || stage.needsResultApproval || stage.isResultApproved) {
+        approvalEligibleCount++;
+      }
+    });
+
+    const resultApprovalTotal = approvalEligibleCount > 0 ? approvalEligibleCount : (selectedDeptSamples.length || 0);
+
+    setPendingCounts({
+      resultDonePending,
+      resultDoneTotal,
+      resultVerifiedPending,
+      resultVerifiedTotal,
+      resultApprovalPending,
+      resultApprovalTotal,
+    });
+  }, [selectedDeptSamples, setPendingCounts]);
 
   // Count for each department tab for current date
   const getDeptSampleCount = (deptName: string) => {
@@ -680,7 +805,19 @@ export default function Dashboard() {
       }
     }
 
-    return matchesSearch && matchesDate && matchesDepartment && matchesStatusFilter;
+    let matchesPendingFilter = true;
+    if (pendingFilter !== 'all') {
+      const stage = getSampleStageInfo(sample);
+      if (pendingFilter === 'result_done') {
+        matchesPendingFilter = stage.needsResultDone;
+      } else if (pendingFilter === 'result_verified') {
+        matchesPendingFilter = stage.needsResultVerified;
+      } else if (pendingFilter === 'result_approval') {
+        matchesPendingFilter = stage.needsResultApproval;
+      }
+    }
+
+    return matchesSearch && matchesDate && matchesDepartment && matchesStatusFilter && matchesPendingFilter;
   });
 
   return (
@@ -753,25 +890,63 @@ export default function Dashboard() {
             </div>
 
             <div style={{ display: 'flex', justifyContent: 'space-between', width: '100%', alignItems: 'center', gap: '8px' }}>
-              <div className="header-search" style={{ width: '235px', padding: '0.2rem 0.5rem', margin: 0, height: '26px', display: 'flex', alignItems: 'center', position: 'relative' }}>
-                <Search size={13} className="search-icon" style={{ color: 'var(--text-secondary)', marginRight: '6px', flexShrink: 0 }} />
-                <input 
-                  type="text" 
-                  placeholder="Search samples, patients, barcodes..." 
-                  className="search-input"
-                  value={searchQuery}
-                  onChange={(e) => setSearchQuery(e.target.value)}
-                  style={{ fontSize: '0.72rem', width: '100%' }}
-                />
-                {searchQuery && (
-                  <button 
-                    onClick={clearSearch} 
-                    type="button"
-                    style={{ background: 'transparent', border: 'none', color: 'var(--text-secondary)', cursor: 'pointer', display: 'flex', alignItems: 'center', padding: '1px', marginLeft: '2px' }}
-                    title="Clear search"
-                  >
-                    <XIcon size={12} />
-                  </button>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                <div className="header-search" style={{ width: '235px', padding: '0.2rem 0.5rem', margin: 0, height: '26px', display: 'flex', alignItems: 'center', position: 'relative' }}>
+                  <Search size={13} className="search-icon" style={{ color: 'var(--text-secondary)', marginRight: '6px', flexShrink: 0 }} />
+                  <input 
+                    type="text" 
+                    placeholder="Search samples, patients, barcodes..." 
+                    className="search-input"
+                    value={searchQuery}
+                    onChange={(e) => setSearchQuery(e.target.value)}
+                    style={{ fontSize: '0.72rem', width: '100%' }}
+                  />
+                  {searchQuery && (
+                    <button 
+                      onClick={clearSearch} 
+                      type="button"
+                      style={{ background: 'transparent', border: 'none', color: 'var(--text-secondary)', cursor: 'pointer', display: 'flex', alignItems: 'center', padding: '1px', marginLeft: '2px' }}
+                      title="Clear search"
+                    >
+                      <XIcon size={12} />
+                    </button>
+                  )}
+                </div>
+
+                {pendingFilter !== 'all' && (
+                  <div style={{
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                    gap: '6px',
+                    padding: '2px 8px',
+                    borderRadius: '4px',
+                    fontSize: '0.72rem',
+                    fontWeight: 600,
+                    background: pendingFilter === 'result_done' ? 'rgba(245, 158, 11, 0.15)' : pendingFilter === 'result_verified' ? 'rgba(168, 85, 247, 0.15)' : 'rgba(6, 182, 212, 0.15)',
+                    color: pendingFilter === 'result_done' ? '#f59e0b' : pendingFilter === 'result_verified' ? '#a855f7' : '#06b6d4',
+                    border: `1px solid ${pendingFilter === 'result_done' ? 'rgba(245, 158, 11, 0.4)' : pendingFilter === 'result_verified' ? 'rgba(168, 85, 247, 0.4)' : 'rgba(6, 182, 212, 0.4)'}`,
+                    whiteSpace: 'nowrap'
+                  }}>
+                    <span>
+                      Pending: {pendingFilter === 'result_done' ? 'Result Done' : pendingFilter === 'result_verified' ? 'Result Verified' : 'Result Approval'}
+                    </span>
+                    <button 
+                      onClick={() => setPendingFilter('all')} 
+                      type="button"
+                      style={{
+                        background: 'transparent',
+                        border: 'none',
+                        color: 'inherit',
+                        cursor: 'pointer',
+                        display: 'flex',
+                        alignItems: 'center',
+                        padding: 0
+                      }}
+                      title="Clear pending filter"
+                    >
+                      <XIcon size={12} />
+                    </button>
+                  </div>
                 )}
               </div>
               <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
