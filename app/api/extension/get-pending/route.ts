@@ -5,6 +5,8 @@ export const dynamic = 'force-dynamic';
 
 export async function GET() {
   try {
+    const now = new Date();
+
     const samples = await prisma.trackedSample.findMany({
       where: {
         isCompleted: false,
@@ -18,20 +20,24 @@ export async function GET() {
           {
             OR: [
               { expectedEndTime: null },
-              { expectedEndTime: { gt: new Date() } }
+              { expectedEndTime: { gt: now } }
             ]
           },
           {
+            // Do NOT check status immediately upon scan.
+            // Only start checking when trigger delay from scan time has elapsed (nextCheckTime <= now).
             OR: [
-              { patientName: '--' }, // Step 1: Immediate fetch of patient and test details
-              { nextCheckTime: null },
-              { nextCheckTime: { lte: new Date() } } // Step 2: Analyzer check gated by trigger delay
+              { nextCheckTime: { lte: now } },
+              { 
+                nextCheckTime: null,
+                createdAt: { lte: new Date(now.getTime() - 120000) } // Safety: at least 2m past scan time
+              }
             ]
           },
           {
             OR: [
               { isProvisional: false },
-              { provisionalExpiry: { lte: new Date() } }
+              { provisionalExpiry: { lte: now } }
             ]
           }
         ]
@@ -40,19 +46,24 @@ export async function GET() {
       take: 1 
     });
     
-    // Move to back of queue while preserving any active future trigger timer
-    if (samples.length > 0) {
-      const s = samples[0];
-      const hasFutureTrigger = s.nextCheckTime && new Date(s.nextCheckTime).getTime() > Date.now();
-      if (!hasFutureTrigger) {
-        await prisma.trackedSample.update({
-          where: { id: s.id },
-          data: { nextCheckTime: new Date(Date.now() + 60000) }
-        });
+    // In-memory guard: Never return sample if its trigger timer is still active
+    const validSamples = samples.filter(s => {
+      if (s.nextCheckTime && new Date(s.nextCheckTime).getTime() > Date.now()) {
+        return false;
       }
+      return true;
+    });
+
+    // Move to back of queue while preserving any active future trigger timer
+    if (validSamples.length > 0) {
+      const s = validSamples[0];
+      await prisma.trackedSample.update({
+        where: { id: s.id },
+        data: { nextCheckTime: new Date(Date.now() + 60000) }
+      });
     }
 
-    const response = NextResponse.json({ success: true, samples });
+    const response = NextResponse.json({ success: true, samples: validSamples });
     response.headers.set('Access-Control-Allow-Origin', '*');
     return response;
   } catch (error) {

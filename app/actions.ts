@@ -14,41 +14,63 @@ export async function saveBarcodeToDatabase(barcode: string, activeTab?: string)
     }
 
     const scanTime = new Date();
+    const effectiveDeptName = (activeTab && activeTab.trim()) ? activeTab.trim() : "HAEMATOLOGY";
+
+    const depts = await prisma.department.findMany({
+      include: { tests: true }
+    });
+
+    let activeDept = depts.find(d => d.name.toLowerCase() === effectiveDeptName.toLowerCase());
+    if (!activeDept) {
+      activeDept = depts.find(d => d.name.toLowerCase() === 'haematology') || depts[0];
+    }
+
     let triggerDelayMins = 0;
-    let defaultTestName = "Waiting...";
-    let defaultTestDetails: any[] = [];
-    let serviceCd = activeTab ? `DEPT:${activeTab}` : undefined;
-
-    if (activeTab) {
-      const depts = await prisma.department.findMany({
-        include: { tests: true }
-      });
-      const activeDept = depts.find(d => d.name.toLowerCase() === activeTab.toLowerCase());
-      if (activeDept) {
-        if (activeDept.triggerTime != null && activeDept.triggerTime > 0) {
-          triggerDelayMins = activeDept.triggerTime;
-        }
-        if (activeDept.tests && activeDept.tests.length > 0) {
-          const matchedTest = activeDept.tests.find(t => 
-            t.testName.toLowerCase().includes('cbc') || 
-            (t.shortName && t.shortName.toLowerCase().includes('cbc'))
-          ) || activeDept.tests[0];
-
-          defaultTestName = matchedTest.shortName || matchedTest.testName;
-          serviceCd = matchedTest.serviceCd || serviceCd;
-          defaultTestDetails = [{
-            name: matchedTest.shortName || matchedTest.testName,
-            status: "Received",
-            serviceCd: matchedTest.serviceCd,
-            intervalTime: matchedTest.intervalTime,
-            intervalTimeVerified: matchedTest.intervalTimeVerified,
-            department: activeDept.name
-          }];
-        }
+    if (activeDept) {
+      if (activeDept.triggerTime != null && activeDept.triggerTime > 0) {
+        triggerDelayMins = activeDept.triggerTime;
+      } else if (activeDept.name.toLowerCase() === 'haematology') {
+        triggerDelayMins = 2;
       }
     }
 
-    // Delayed Check: The trigger timer (2, 3, or 5 mins) only gates the background status polling
+    if (triggerDelayMins <= 0 && effectiveDeptName.toLowerCase() === 'haematology') {
+      triggerDelayMins = 2;
+    }
+
+    let defaultTestName = "CBC";
+    let serviceCd = `DEPT:${activeDept ? activeDept.name : effectiveDeptName}`;
+    let defaultTestDetails: any[] = [];
+
+    if (activeDept && activeDept.tests && activeDept.tests.length > 0) {
+      const matchedTest = activeDept.tests.find(t => 
+        t.testName.toLowerCase().includes('cbc') || 
+        (t.shortName && t.shortName.toLowerCase().includes('cbc'))
+      ) || activeDept.tests[0];
+
+      defaultTestName = matchedTest.shortName || matchedTest.testName;
+      serviceCd = matchedTest.serviceCd || serviceCd;
+      defaultTestDetails = [{
+        name: matchedTest.shortName || matchedTest.testName,
+        status: "Received",
+        serviceCd: matchedTest.serviceCd,
+        intervalTime: matchedTest.intervalTime || 30,
+        intervalTimeVerified: matchedTest.intervalTimeVerified,
+        department: activeDept.name
+      }];
+    } else {
+      defaultTestDetails = [{
+        name: defaultTestName,
+        status: "Received",
+        serviceCd: undefined,
+        intervalTime: 30,
+        intervalTimeVerified: null,
+        department: effectiveDeptName
+      }];
+    }
+
+    // Delayed Check: The trigger timer strictly gates the background status check.
+    // Trigger time is calculated from the exact scan time.
     const nextCheckTime = new Date(scanTime.getTime() + triggerDelayMins * 60000);
 
     const sample = await prisma.trackedSample.create({
@@ -59,8 +81,8 @@ export async function saveBarcodeToDatabase(barcode: string, activeTab?: string)
         testName: defaultTestName,
         patientName: "--",
         serviceCd: serviceCd,
-        testDetails: defaultTestDetails.length > 0 ? JSON.stringify(defaultTestDetails) : undefined,
-        createdAt: scanTime,
+        testDetails: JSON.stringify(defaultTestDetails),
+        createdAt: scanTime,       // Exact scan timestamp
         nextCheckTime: nextCheckTime // Gated trigger delay for result status check
       }
     });
@@ -217,9 +239,24 @@ export async function getAllTrackedSamples(dateStr?: string) {
 
       if (departments.length === 0 && s.testName) {
         const mappedByName = configByName.get(s.testName.toLowerCase().trim());
-        if (mappedByName?.department && !departments.includes(mappedByName.department)) {
-          departments.push(mappedByName.department);
+        if (mappedByName) {
+          if (mappedByName.department && !departments.includes(mappedByName.department)) {
+            departments.push(mappedByName.department);
+          }
+          if (mappedByName.triggerTime != null && mappedByName.triggerTime < minTriggerTime) minTriggerTime = mappedByName.triggerTime;
+          if (mappedByName.provisionalTime != null && mappedByName.provisionalTime < minProvisionalTime) minProvisionalTime = mappedByName.provisionalTime;
         }
+      }
+
+      // Fallback: If minTriggerTime is not set from configs, deduce from nextCheckTime & createdAt
+      if (minTriggerTime === Infinity && s.nextCheckTime && s.createdAt) {
+        const diffMins = Math.round((new Date(s.nextCheckTime).getTime() - new Date(s.createdAt).getTime()) / 60000);
+        if (diffMins > 0) {
+          minTriggerTime = diffMins;
+        }
+      }
+      if (minTriggerTime === Infinity && (departments.includes('HAEMATOLOGY') || (s.testName && s.testName.toLowerCase().includes('cbc')))) {
+        minTriggerTime = 2;
       }
 
       return {

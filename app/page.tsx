@@ -210,7 +210,7 @@ export default function Dashboard() {
   const [editModal, setEditModal] = useState<{ id: string, barcode: string } | null>(null);
   const [editInput, setEditInput] = useState('');
   const [departments, setDepartments] = useState<{id: string, name: string, triggerTime?: number | null, provisionalTime?: number | null}[]>([]);
-  const [activeTab, setActiveTab] = useState<string>('');
+  const [activeTab, setActiveTab] = useState<string>('HAEMATOLOGY');
   const [extendModal, setExtendModal] = useState<{ id: string, barcode: string, testDetails: any[] } | null>(null);
   const [extendSelections, setExtendSelections] = useState<string[]>([]);
   const [extendMins, setExtendMins] = useState<number>(30);
@@ -462,15 +462,20 @@ export default function Dashboard() {
     }, 10);
     
     const now = new Date();
-    const currentDept = departments.find(d => d.name.toLowerCase() === (activeTab || '').toLowerCase());
-    const delayMins = currentDept?.triggerTime || 0;
+    const effectiveDept = (activeTab && activeTab.trim()) ? activeTab.trim() : "HAEMATOLOGY";
+    const currentDept = departments.find(d => d.name.toLowerCase() === effectiveDept.toLowerCase());
+    let delayMins = currentDept?.triggerTime ?? (effectiveDept.toLowerCase() === 'haematology' ? 2 : 0);
+    if (delayMins <= 0 && effectiveDept.toLowerCase() === 'haematology') {
+      delayMins = 2;
+    }
+
     const defaultTestName = "CBC";
     const defaultTestDetails = [{
       name: defaultTestName,
       status: "Received",
       intervalTime: 10,
       intervalTimeVerified: 15,
-      department: activeTab || "HAEMATOLOGY"
+      department: effectiveDept
     }];
 
     // Step 1: Immediate row creation on dashboard in Received status
@@ -479,7 +484,7 @@ export default function Dashboard() {
       barcode: currentInput,
       patient: "--",
       test: defaultTestName,
-      serviceCd: activeTab ? `DEPT:${activeTab}` : '--',
+      serviceCd: `DEPT:${effectiveDept}`,
       status: "Received",
       entryDate: formatDateIST(now),
       entryTime: formatTimeIST(now),
@@ -496,7 +501,7 @@ export default function Dashboard() {
       triggerRemainingSecs: delayMins * 60,
       target: '--',
       delayPercent: 0,
-      departments: activeTab ? [activeTab] : [],
+      departments: [effectiveDept],
       isOverdue: false,
       isOverdueAfterExtraTime: false,
       testDetails: defaultTestDetails,
@@ -512,7 +517,7 @@ export default function Dashboard() {
       const res = await fetch('/api/save-barcode', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ barcode: currentInput, activeTab })
+        body: JSON.stringify({ barcode: currentInput, activeTab: effectiveDept })
       });
       const response = await res.json();
       
