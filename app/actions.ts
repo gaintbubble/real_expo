@@ -13,12 +13,20 @@ export async function saveBarcodeToDatabase(barcode: string, activeTab?: string)
       return { success: false, message: "Barcode already exists!" };
     }
 
-    let nextCheckTime = new Date();
-    let serviceCd = undefined;
-    
+    const scanTime = new Date();
+    let triggerDelayMins = 0;
+
     if (activeTab) {
-      serviceCd = `DEPT:${activeTab}`;
+      const depts = await prisma.department.findMany();
+      const activeDept = depts.find(d => d.name.toLowerCase() === activeTab.toLowerCase());
+      if (activeDept && activeDept.triggerTime != null && activeDept.triggerTime > 0) {
+        triggerDelayMins = activeDept.triggerTime;
+      }
     }
+
+    // Enforce trigger delay starting from exact scan time
+    const nextCheckTime = new Date(scanTime.getTime() + triggerDelayMins * 60000);
+    let serviceCd = activeTab ? `DEPT:${activeTab}` : undefined;
 
     const sample = await prisma.trackedSample.create({
       data: {
@@ -27,11 +35,18 @@ export async function saveBarcodeToDatabase(barcode: string, activeTab?: string)
         testName: "Waiting...",
         patientName: "--",
         serviceCd: serviceCd,
+        createdAt: scanTime,
         nextCheckTime: nextCheckTime
       }
     });
 
-    return { success: true, sample };
+    return { 
+      success: true, 
+      sample, 
+      triggerDelayMins,
+      scanTime: scanTime.toISOString(),
+      nextCheckTime: nextCheckTime.toISOString()
+    };
   } catch (error) {
     console.error("Save barcode error:", error);
     return { success: false, message: "Database error" };
@@ -57,78 +72,139 @@ export async function getAllTrackedSamples(dateStr?: string) {
       orderBy: { createdAt: 'desc' },
       take: dateStr ? undefined : 1000
     });
-    
-    const departmentsList = await prisma.department.findMany();
-    const deptMap = new Map(departmentsList.map(d => [d.name, { triggerTime: d.triggerTime, provisionalTime: d.provisionalTime }]));
 
-    const serviceCds = samples.map(s => s.serviceCd).filter(Boolean) as string[];
-    const uniqueServiceCds = Array.from(new Set(
-      serviceCds.flatMap(cdList => cdList.split(',').map(cd => cd.trim()))
-    ));
-    
-    let configMap = new Map<string, { name: string, department: string, triggerTime: number | null, provisionalTime: number | null, intervalTime: number | null, intervalTimeVerified: number | null }>();
-    if (uniqueServiceCds.length > 0) {
-      const configs = await prisma.testConfig.findMany({
-        where: {
-          serviceCd: { in: uniqueServiceCds }
-        },
-        include: { department: true }
-      });
-      configMap = new Map(configs.map(c => [
-        c.serviceCd as string, 
-        { 
-          name: c.shortName || c.testName, 
-          department: c.department.name,
-          triggerTime: c.department.triggerTime,
-          provisionalTime: c.department.provisionalTime,
-          intervalTime: c.intervalTime,
-          intervalTimeVerified: c.intervalTimeVerified
+    // Enforce Trigger Delay: Only after trigger duration has elapsed should scanned samples be displayed on dashboard
+    const now = new Date();
+    const readySamples = samples.filter(s => {
+      if (s.currentStatus === 'Pending LIS Search' && s.nextCheckTime) {
+        if (now < new Date(s.nextCheckTime)) {
+          return false; // Still within trigger delay, do not display on dashboard yet
         }
-      ]));
-    }
+      }
+      return true;
+    });
 
-    return samples.map(s => {
+    const departmentsList = await prisma.department.findMany();
+    const deptMap = new Map(departmentsList.map(d => [d.name.toLowerCase(), { name: d.name, triggerTime: d.triggerTime, provisionalTime: d.provisionalTime }]));
+
+    // Query all test configs so every test in testDetails can be matched by serviceCd or testName
+    const allConfigs = await prisma.testConfig.findMany({
+      include: { department: true }
+    });
+
+    const configByServiceCd = new Map<string, any>();
+    const configByName = new Map<string, any>();
+
+    allConfigs.forEach(c => {
+      const info = {
+        name: c.shortName || c.testName,
+        testName: c.testName,
+        shortName: c.shortName,
+        serviceCd: c.serviceCd,
+        department: c.department?.name,
+        triggerTime: c.department?.triggerTime,
+        provisionalTime: c.department?.provisionalTime,
+        intervalTime: c.intervalTime,
+        intervalTimeVerified: c.intervalTimeVerified
+      };
+      if (c.serviceCd) {
+        configByServiceCd.set(c.serviceCd.toLowerCase().trim(), info);
+      }
+      if (c.testName) {
+        configByName.set(c.testName.toLowerCase().trim(), info);
+      }
+      if (c.shortName) {
+        configByName.set(c.shortName.toLowerCase().trim(), info);
+      }
+    });
+
+    return readySamples.map(s => {
       let minTriggerTime = Infinity;
       let minProvisionalTime = Infinity;
       let minIntervalTime = Infinity;
       let minIntervalTimeVerified = Infinity;
 
-      let displayTestName = s.testName;
       let departments: string[] = [];
+
+      // Parse individual test details and attach test-level SLA configurations
+      let parsedDetails: any[] = [];
+      if (s.testDetails) {
+        try {
+          parsedDetails = JSON.parse(s.testDetails);
+        } catch {
+          parsedDetails = [];
+        }
+      }
+
+      const enhancedTestDetails = parsedDetails.map((td: any) => {
+        const nameKey = (td.name || '').toLowerCase().trim();
+        const cdKey = (td.serviceCd || '').toLowerCase().trim();
+        const cfg = (cdKey ? configByServiceCd.get(cdKey) : null) || configByName.get(nameKey);
+
+        const intervalTime = cfg?.intervalTime ?? 30; // Configured result entry time (mins)
+        const intervalTimeVerified = cfg?.intervalTimeVerified ?? null; // Configured verification time (mins, or null if none)
+        const testDept = cfg?.department;
+
+        if (testDept && !departments.includes(testDept)) {
+          departments.push(testDept);
+        }
+        if (cfg?.triggerTime != null && cfg.triggerTime < minTriggerTime) minTriggerTime = cfg.triggerTime;
+        if (cfg?.provisionalTime != null && cfg.provisionalTime < minProvisionalTime) minProvisionalTime = cfg.provisionalTime;
+        if (intervalTime < minIntervalTime) minIntervalTime = intervalTime;
+        if (intervalTimeVerified != null && intervalTimeVerified < minIntervalTimeVerified) minIntervalTimeVerified = intervalTimeVerified;
+
+        return {
+          ...td,
+          serviceCd: td.serviceCd || cfg?.serviceCd,
+          intervalTime,
+          intervalTimeVerified,
+          department: testDept || td.department
+        };
+      });
+
+      let displayTestName = s.testName;
       if (s.serviceCd) {
         if (s.serviceCd.startsWith('DEPT:')) {
           const deptName = s.serviceCd.substring(5);
-          departments.push(deptName);
-          const deptData = deptMap.get(deptName);
+          if (!departments.includes(deptName)) {
+            departments.push(deptName);
+          }
+          const deptData = deptMap.get(deptName.toLowerCase());
           if (deptData?.triggerTime != null && deptData.triggerTime < minTriggerTime) minTriggerTime = deptData.triggerTime;
           if (deptData?.provisionalTime != null && deptData.provisionalTime < minProvisionalTime) minProvisionalTime = deptData.provisionalTime;
         } else {
-          const individualCds = s.serviceCd.split(',').map(cd => cd.trim());
-          const originalTestNames = s.testName.split(',').map(name => name.trim());
+          const individualCds = s.serviceCd.split(',').map((cd: string) => cd.trim());
+          const originalTestNames = s.testName.split(',').map((name: string) => name.trim());
           
-          const hasMapping = individualCds.some(cd => configMap.has(cd));
-          if (hasMapping) {
-            displayTestName = individualCds.map((cd, index) => {
-              const mapped = configMap.get(cd);
-              if (mapped) {
-                if (!departments.includes(mapped.department)) {
-                  departments.push(mapped.department);
-                }
-                if (mapped.triggerTime != null && mapped.triggerTime < minTriggerTime) minTriggerTime = mapped.triggerTime;
-                if (mapped.provisionalTime != null && mapped.provisionalTime < minProvisionalTime) minProvisionalTime = mapped.provisionalTime;
-                if (mapped.intervalTime != null && mapped.intervalTime < minIntervalTime) minIntervalTime = mapped.intervalTime;
-                if (mapped.intervalTimeVerified != null && mapped.intervalTimeVerified < minIntervalTimeVerified) minIntervalTimeVerified = mapped.intervalTimeVerified;
-                
-                return mapped.name;
+          displayTestName = individualCds.map((cd: string, index: number) => {
+            const mapped = configByServiceCd.get(cd.toLowerCase());
+            if (mapped) {
+              if (!departments.includes(mapped.department)) {
+                departments.push(mapped.department);
               }
-              return originalTestNames[index] || cd;
-            }).join(', ');
-          }
+              if (mapped.triggerTime != null && mapped.triggerTime < minTriggerTime) minTriggerTime = mapped.triggerTime;
+              if (mapped.provisionalTime != null && mapped.provisionalTime < minProvisionalTime) minProvisionalTime = mapped.provisionalTime;
+              if (mapped.intervalTime != null && mapped.intervalTime < minIntervalTime) minIntervalTime = mapped.intervalTime;
+              if (mapped.intervalTimeVerified != null && mapped.intervalTimeVerified < minIntervalTimeVerified) minIntervalTimeVerified = mapped.intervalTimeVerified;
+              
+              return mapped.name;
+            }
+            return originalTestNames[index] || cd;
+          }).join(', ');
         }
       }
+
+      if (departments.length === 0 && s.testName) {
+        const mappedByName = configByName.get(s.testName.toLowerCase().trim());
+        if (mappedByName?.department && !departments.includes(mappedByName.department)) {
+          departments.push(mappedByName.department);
+        }
+      }
+
       return {
         ...s,
         displayTestName,
+        testDetails: JSON.stringify(enhancedTestDetails),
         departments,
         triggerTime: minTriggerTime === Infinity ? null : minTriggerTime,
         provisionalTime: minProvisionalTime === Infinity ? null : minProvisionalTime,
@@ -279,9 +355,23 @@ export async function simulateFalseTrigger(id: string, type: 'trigger' | 'result
     if (type === 'trigger') {
       updateData.currentStatus = "Sample Received";
       updateData.receivedTime = new Date();
+      if (existingSample.testDetails) {
+         try {
+           const details = JSON.parse(existingSample.testDetails);
+           const newDetails = details.map((t: any) => ({ ...t, status: 'Sample Received' }));
+           updateData.testDetails = JSON.stringify(newDetails);
+         } catch(e) {}
+      }
     } else if (type === 'result') {
       updateData.currentStatus = "Result Done"; 
       updateData.resultTime = new Date();
+      if (existingSample.testDetails) {
+         try {
+           const details = JSON.parse(existingSample.testDetails);
+           const newDetails = details.map((t: any) => ({ ...t, status: 'Result Done' }));
+           updateData.testDetails = JSON.stringify(newDetails);
+         } catch(e) {}
+      }
     } else if (type === 'verification') {
       updateData.currentStatus = "Verified";
       updateData.isCompleted = true;

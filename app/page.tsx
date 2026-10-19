@@ -151,6 +151,7 @@ export default function Dashboard() {
   const [statusFilter, setStatusFilter] = useState<string>('all');
   const [selectedDate, setSelectedDate] = useState<string>(() => getTodayDateIST());
   const [isScanning, setIsScanning] = useState(false);
+  const [scanNotice, setScanNotice] = useState<{ barcode: string; delayMins: number } | null>(null);
   const [isMuted, setIsMuted] = useState(false); // Default Alarm ON on login
   const [alarmTriggers, setAlarmTriggers] = useState<AlarmTriggers>(DEFAULT_ALARM_TRIGGERS);
 
@@ -265,93 +266,139 @@ export default function Dashboard() {
     }
   };
 
-  useEffect(() => {
-    const loadRealData = async () => {
-      try {
-        const dbSamples = await getAllTrackedSamples(selectedDate);
-        if (!Array.isArray(dbSamples)) return;
-        
-        const formattedSamples: Sample[] = dbSamples.map((s: any) => {
-          const now = new Date();
-          let isTriggerOverdue = false;
+  const loadRealData = useCallback(async () => {
+    try {
+      const dbSamples = await getAllTrackedSamples(selectedDate);
+      if (!Array.isArray(dbSamples)) return;
+      
+      const formattedSamples: Sample[] = dbSamples.map((s: any) => {
+        const now = new Date();
+
+        const createdAtDate = s.createdAt ? new Date(s.createdAt) : null;
+        const receivedDateObj = s.receivedTime ? new Date(s.receivedTime) : null;
+        const resultDateObj = s.resultTime ? new Date(s.resultTime) : null;
+
+        const statusLower = (s.currentStatus || '').toLowerCase();
+
+        // Parse and evaluate individual test SLAs dynamically against persistent timestamps
+        const rawTestDetails = s.testDetails ? (() => { try { return JSON.parse(s.testDetails); } catch { return []; } })() : [];
+
+        const testDetails = rawTestDetails.map((td: any) => {
+          const ds = (td.status || '').toLowerCase();
+          const isApproved = ds.includes('approved') || ds.includes('authorized') || ds.includes('dispatch');
+          const isVerified = isApproved || ds.includes('verified');
+          const isDone = isVerified || ds.includes('done') || ds.includes('completed');
+
+          // 1. Result Entry SLA Tracking:
+          // Calculate result entry deadline using sample received timestamp + configured result entry time
           let isResultOverdue = false;
-          let isVerificationOverdue = false;
-
-          const createdAtDate = s.createdAt ? new Date(s.createdAt) : null;
-          const receivedDateObj = s.receivedTime ? new Date(s.receivedTime) : null;
-          const resultDateObj = s.resultTime ? new Date(s.resultTime) : null;
-
-          const statusLower = (s.currentStatus || '').toLowerCase();
-
-          // 1. Trigger Time Monitoring
-          if (s.triggerTime != null && receivedDateObj) {
-            const limit = new Date(receivedDateObj.getTime() + s.triggerTime * 60000);
-            if (now > limit && statusLower.includes('received')) {
-              isTriggerOverdue = true;
-            }
-          }
-
-          // 2. Result Done (Mins) Monitoring
-          const baseResultDate = receivedDateObj || createdAtDate;
-          if (s.intervalTime != null && baseResultDate) {
-            const limit = new Date(baseResultDate.getTime() + s.intervalTime * 60000);
-            if (now > limit && statusLower.includes('received')) {
+          let isResultOverdueAfterExtraTime = false;
+          if (receivedDateObj && !isDone) {
+            const resultEntryMins = td.intervalTime != null ? td.intervalTime : (s.intervalTime || 30);
+            const extraMins = td.extraTime || 0;
+            const originalDeadline = new Date(receivedDateObj.getTime() + resultEntryMins * 60000);
+            const extendedDeadline = new Date(receivedDateObj.getTime() + (resultEntryMins + extraMins) * 60000);
+            
+            if (now > extendedDeadline) {
+              if (extraMins > 0) {
+                isResultOverdueAfterExtraTime = true;
+              } else {
+                isResultOverdue = true;
+              }
+            } else if (now > originalDeadline && extraMins === 0) {
               isResultOverdue = true;
             }
           }
 
-          // 3. Verified (Mins) Monitoring
-          if (s.intervalTimeVerified != null && resultDateObj) {
-            const limit = new Date(resultDateObj.getTime() + s.intervalTimeVerified * 60000);
-            if (now > limit && statusLower.includes('result done')) {
-              isVerificationOverdue = true;
+          // 2. Verification SLA Tracking:
+          // Calculate verification deadline using result done timestamp + configured verification time
+          // Optional SLA rule: If no verification time is configured for a test, stop all tracking once result is done.
+          let isVerificationOverdue = false;
+          if (td.intervalTimeVerified != null && td.intervalTimeVerified > 0) {
+            if (isDone && !isVerified) {
+              const baseTime = resultDateObj || receivedDateObj;
+              if (baseTime) {
+                const verificationDeadline = new Date(baseTime.getTime() + td.intervalTimeVerified * 60000);
+                if (now > verificationDeadline) {
+                  isVerificationOverdue = true;
+                }
+              }
             }
           }
 
           return {
-            id: s.id,
-            barcode: s.barcode,
-            patient: s.patientName || '--',
-            test: s.displayTestName || s.testName || 'Waiting...',
-            testDetails: s.testDetails ? (() => { try { return JSON.parse(s.testDetails); } catch { return []; } })() : [],
-            serviceCd: s.serviceCd || '--',
-            status: s.currentStatus,
-            entryDate: formatDateIST(s.createdAt),
-            entryTime: formatTimeIST(s.createdAt),
-            receivedDate: formatDateIST(s.receivedTime),
-            receivedTime: formatTimeIST(s.receivedTime),
-            resultDate: formatDateIST(s.resultTime),
-            resultTime: formatTimeIST(s.resultTime),
-            target: '--',
-            delayPercent: 0,
-            departments: s.departments || [],
-            isOverdue: !s.isCompleted && (
-              (s.expectedEndTime && new Date() > new Date(s.expectedEndTime)) || 
-              (!s.expectedEndTime && s.receivedTime && new Date().getTime() - new Date(s.receivedTime).getTime() > 15 * 60000)
-            ),
-            isOverdueAfterExtraTime: !s.isCompleted && (
-              (s.expectedEndTime && new Date() > new Date(s.expectedEndTime)) || 
-              (!s.expectedEndTime && s.receivedTime && new Date().getTime() - new Date(s.receivedTime).getTime() > 15 * 60000)
-            ) && (s.testDetails ? (() => { try { return JSON.parse(s.testDetails).some((t: any) => t.extraTime && t.extraTime > 0); } catch { return false; } })() : false),
-            isTriggerOverdue,
+            ...td,
             isResultOverdue,
+            isResultOverdueAfterExtraTime,
             isVerificationOverdue,
-            isProvisional: Boolean(s.isProvisional),
-            provisionalTime: s.provisionalTime,
-            provisionalExpiry: s.provisionalExpiry,
+            isDone,
+            isVerified,
+            isApproved
           };
         });
-        setSamples((prev) => {
-          const tempSamples = prev.filter(s => s.id.startsWith('temp-'));
-          const tempBarcodes = new Set(tempSamples.map(s => s.barcode));
-          const filteredFormatted = formattedSamples.filter(f => !tempBarcodes.has(f.barcode));
-          return [...tempSamples, ...filteredFormatted];
-        });
-      } catch (error) {
-        console.warn("Polling error (Server might be restarting):", error);
-      }
-    };
-    
+
+        // Fallback if sample has no testDetails array:
+        const fallbackIsVerified = statusLower.includes('verified') || statusLower.includes('approved') || statusLower.includes('dispatch');
+        const fallbackIsDone = fallbackIsVerified || statusLower.includes('done') || statusLower.includes('completed');
+
+        let fallbackResultOverdue = false;
+        if (testDetails.length === 0 && receivedDateObj && !fallbackIsDone) {
+          const limit = new Date(receivedDateObj.getTime() + (s.intervalTime || 30) * 60000);
+          if (now > limit) fallbackResultOverdue = true;
+        }
+
+        let fallbackVerificationOverdue = false;
+        if (testDetails.length === 0 && s.intervalTimeVerified != null && s.intervalTimeVerified > 0 && fallbackIsDone && !fallbackIsVerified) {
+          const baseTime = resultDateObj || receivedDateObj;
+          if (baseTime) {
+            const limit = new Date(baseTime.getTime() + s.intervalTimeVerified * 60000);
+            if (now > limit) fallbackVerificationOverdue = true;
+          }
+        }
+
+        const isResultOverdue = testDetails.some((t: any) => t.isResultOverdue) || fallbackResultOverdue;
+        const isVerificationOverdue = testDetails.some((t: any) => t.isVerificationOverdue) || fallbackVerificationOverdue;
+
+        return {
+          id: s.id,
+          barcode: s.barcode,
+          patient: s.patientName || '--',
+          test: s.displayTestName || s.testName || 'Waiting...',
+          testDetails,
+          serviceCd: s.serviceCd || '--',
+          status: s.currentStatus,
+          entryDate: formatDateIST(s.createdAt),
+          entryTime: formatTimeIST(s.createdAt),
+          receivedDate: formatDateIST(s.receivedTime),
+          receivedTime: formatTimeIST(s.receivedTime),
+          resultDate: formatDateIST(s.resultTime),
+          resultTime: formatTimeIST(s.resultTime),
+          target: '--',
+          delayPercent: 0,
+          departments: s.departments || [],
+          isOverdue: !s.isCompleted && (
+            (s.expectedEndTime && new Date() > new Date(s.expectedEndTime)) || 
+            (!s.expectedEndTime && s.receivedTime && new Date().getTime() - new Date(s.receivedTime).getTime() > 15 * 60000)
+          ),
+          isOverdueAfterExtraTime: !s.isCompleted && (
+            (s.expectedEndTime && new Date() > new Date(s.expectedEndTime)) || 
+            (!s.expectedEndTime && s.receivedTime && new Date().getTime() - new Date(s.receivedTime).getTime() > 15 * 60000)
+          ) && (testDetails.length > 0 ? testDetails.some((t: any) => t.extraTime && t.extraTime > 0) : false),
+          isTriggerOverdue: false,
+          isResultOverdue,
+          isVerificationOverdue,
+          isProvisional: Boolean(s.isProvisional),
+          provisionalTime: s.provisionalTime,
+          provisionalExpiry: s.provisionalExpiry,
+        };
+      });
+      setSamples(formattedSamples);
+    } catch (error) {
+      console.warn("Polling error (Server might be restarting):", error);
+    }
+  }, [selectedDate]);
+
+  useEffect(() => {
     // Initial load
     loadRealData();
     
@@ -364,7 +411,7 @@ export default function Dashboard() {
     
     // Cleanup interval on unmount
     return () => clearInterval(intervalId);
-  }, [selectedDate]);
+  }, [loadRealData]);
 
   const handleScan = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -373,43 +420,14 @@ export default function Dashboard() {
     
     // Clear input immediately for next scan instantly
     setBarcodeInput('');
+    setIsScanning(true);
     
-    // Optimistic UI update
-    const tempId = 'temp-' + Date.now() + '-' + Math.random().toString(36).substring(7);
-    const now = new Date();
-    const optimisticSample: Sample = {
-      id: tempId,
-      barcode: currentInput,
-      patient: 'Loading...',
-      test: 'Loading...',
-      serviceCd: '--',
-      status: 'Saving...',
-      entryDate: formatDateIST(now),
-      entryTime: formatTimeIST(now),
-      receivedDate: '--',
-      receivedTime: '--',
-      resultDate: '--',
-      resultTime: '--',
-      target: '--',
-      delayPercent: 0,
-      departments: activeTab ? [activeTab] : [],
-      isOverdue: false,
-      isOverdueAfterExtraTime: false,
-      isProvisional: false,
-      provisionalTime: null,
-      provisionalExpiry: null,
-    };
-    
-    setSamples((prev) => [optimisticSample, ...prev]);
-    
-    // Focus back immediately just in case
+    // Focus back immediately
     setTimeout(() => {
       if (inputRef.current) {
         inputRef.current.focus();
       }
     }, 10);
-    
-    setIsScanning(true);
     
     try {
       const res = await fetch('/api/save-barcode', {
@@ -419,39 +437,26 @@ export default function Dashboard() {
       });
       const response = await res.json();
       
-      if (response.success && response.sample) {
-        const newSample: Sample = {
-          id: response.sample.id,
-          barcode: response.sample.barcode,
-          patient: response.sample.patientName || '--',
-          test: ('displayTestName' in response.sample ? (response.sample as { displayTestName?: string }).displayTestName : undefined) || response.sample.testName || 'Waiting...',
-          serviceCd: response.sample.serviceCd || '--',
-          status: response.sample.currentStatus || 'Pending LIS Search',
-          entryDate: formatDateIST(response.sample.createdAt),
-          entryTime: formatTimeIST(response.sample.createdAt),
-          receivedDate: formatDateIST(response.sample.receivedTime),
-          receivedTime: formatTimeIST(response.sample.receivedTime),
-          resultDate: formatDateIST(response.sample.resultTime),
-          resultTime: formatTimeIST(response.sample.resultTime),
-          target: '--',
-          delayPercent: 0,
-          departments: ('departments' in response.sample && (response.sample as any).departments.length > 0) ? (response.sample as any).departments : (activeTab ? [activeTab] : []),
-          isOverdue: false,
-          isOverdueAfterExtraTime: false,
-          isProvisional: Boolean(response.sample.isProvisional),
-          provisionalTime: response.sample.provisionalTime || null,
-          provisionalExpiry: response.sample.provisionalExpiry ? new Date(response.sample.provisionalExpiry).toISOString() : null,
-        };
-        
-        setSamples((prev) => prev.map(s => s.id === tempId ? newSample : s));
+      if (response.success) {
+        const delayMins = response.triggerDelayMins || 0;
+        setScanNotice({ barcode: currentInput, delayMins });
+        setTimeout(() => setScanNotice(null), 5000);
+
+        if (delayMins === 0) {
+          // If no delay, trigger early reload
+          setTimeout(() => {
+            getAllTrackedSamples(selectedDate).then(data => {
+              if (Array.isArray(data)) {
+                loadRealData();
+              }
+            });
+          }, 1000);
+        }
       } else {
-        // Revert optimistic update on failure
-        setSamples((prev) => prev.filter(s => s.id !== tempId));
         alert(response.message || "Failed to save barcode.");
       }
     } catch (error) {
-      setSamples((prev) => prev.filter(s => s.id !== tempId));
-      console.error(error);
+      console.error("Scan error:", error);
       alert("Error saving barcode.");
     } finally {
       setIsScanning(false);
@@ -950,7 +955,7 @@ export default function Dashboard() {
                 )}
               </div>
               <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-                <form onSubmit={handleScan} className="header-search" style={{ width: '145px', padding: '0.2rem 0.45rem', margin: 0, height: '26px', borderColor: 'var(--accent-primary)', background: 'rgba(59, 130, 246, 0.05)' }}>
+                <form onSubmit={handleScan} className="header-search" style={{ position: 'relative', width: '145px', padding: '0.2rem 0.45rem', margin: 0, height: '26px', borderColor: 'var(--accent-primary)', background: 'rgba(59, 130, 246, 0.05)' }}>
                   <Barcode size={13} className="search-icon" style={{ color: 'var(--accent-primary)', marginRight: '5px' }} />
                   <input 
                     ref={inputRef}
@@ -961,6 +966,35 @@ export default function Dashboard() {
                     onChange={(e) => setBarcodeInput(e.target.value)}
                     style={{ fontSize: '0.72rem' }}
                   />
+                  {scanNotice && (
+                    <div style={{
+                      position: 'absolute',
+                      top: 'calc(100% + 4px)',
+                      left: 0,
+                      zIndex: 100,
+                      background: 'var(--bg-secondary)',
+                      border: '1px solid var(--accent-primary)',
+                      borderRadius: '5px',
+                      padding: '4px 8px',
+                      whiteSpace: 'nowrap',
+                      fontSize: '0.7rem',
+                      color: 'var(--text-primary)',
+                      boxShadow: '0 4px 15px rgba(0,0,0,0.4)',
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: '5px',
+                      animation: 'fadeIn 0.15s ease'
+                    }}>
+                      <span style={{ color: 'var(--accent-primary)', fontWeight: 600 }}>{scanNotice.barcode}</span>
+                      {scanNotice.delayMins > 0 ? (
+                        <span style={{ color: 'var(--warning)', fontSize: '0.66rem' }}>
+                          ({scanNotice.delayMins}m trigger delay)
+                        </span>
+                      ) : (
+                        <span style={{ color: 'var(--success)', fontSize: '0.66rem' }}>(Instant)</span>
+                      )}
+                    </div>
+                  )}
                 </form>
 
                 <DatePicker 
@@ -1211,80 +1245,113 @@ export default function Dashboard() {
                     <td className="info-value" style={{ fontSize: '10px' }}>{sample.patient}</td>
                     <td className="info-value" style={{ whiteSpace: 'normal' }}>
                       {sample.testDetails && sample.testDetails.length > 0 ? (
-                        <div style={{ display: 'flex', flexWrap: 'wrap', gap: '2px' }}>
+                        <div style={{ display: 'flex', flexWrap: 'wrap', gap: '3px' }}>
                           {sample.testDetails.map((td: any, i: number) => {
                             const ds = (td.status || '').toLowerCase();
-                            const isVerified = ds.includes('verified') || ds.includes('approved') || ds.includes('dispatch') || ds.includes('authorized');
-                            const isDone = isVerified || ds.includes('completed') || ds.includes('done');
-                            const isPending = !isDone;
-                            const isOverdue = isPending && sample.isOverdue;
-                            const isOverdueAfterExtraTime = isPending && sample.isOverdueAfterExtraTime;
+                            const isVerified = td.isVerified || ds.includes('verified') || ds.includes('approved') || ds.includes('dispatch') || ds.includes('authorized');
+                            const isDone = td.isDone || isVerified || ds.includes('completed') || ds.includes('done');
                             
-                            let bg = isDone ? 'rgba(16, 185, 129, 0.1)' : 'rgba(255, 255, 255, 0.05)';
+                            // Individual test-level SLA alerts
+                            const isVerificationOverdue = Boolean(td.isVerificationOverdue && !isVerified);
+                            const isExtraOverdue = Boolean(td.isResultOverdueAfterExtraTime && !isDone);
+                            const isResultOverdue = Boolean(td.isResultOverdue && !isDone);
+
+                            let bg = 'rgba(255, 255, 255, 0.05)';
                             let anim = 'none';
-                            
-                            if (sample.isVerificationOverdue && !isVerified) {
-                                anim = 'blinkPurple 1.5s infinite ease-in-out';
-                                bg = 'rgba(139, 92, 246, 0.2)'; // Purple background
-                            } else if (sample.isResultOverdue && !isDone) {
-                                anim = 'blinkAlert 1.5s infinite ease-in-out';
-                                bg = 'rgba(245, 158, 11, 0.2)'; // Yellow background
-                            } else if (isOverdueAfterExtraTime) {
-                                anim = 'blinkRed 1s infinite ease-in-out';
-                            } else if (isOverdue) {
-                                anim = 'blinkAlert 1s infinite ease-in-out';
+                            let border = '1px solid var(--border-color)';
+                            let color = 'var(--text-primary)';
+
+                            if (isVerificationOverdue) {
+                              anim = 'blinkPurple 1.5s infinite ease-in-out';
+                              bg = 'rgba(139, 92, 246, 0.22)';
+                              border = '1px solid rgba(139, 92, 246, 0.6)';
+                              color = '#a78bfa';
+                            } else if (isExtraOverdue) {
+                              anim = 'blinkRed 1s infinite ease-in-out';
+                              bg = 'rgba(239, 68, 68, 0.22)';
+                              border = '1px solid rgba(239, 68, 68, 0.6)';
+                              color = '#ef4444';
+                            } else if (isResultOverdue) {
+                              anim = 'blinkAlert 1.5s infinite ease-in-out';
+                              bg = 'rgba(245, 158, 11, 0.22)';
+                              border = '1px solid rgba(245, 158, 11, 0.6)';
+                              color = '#f59e0b';
+                            } else if (isDone) {
+                              // Reached Result Done within allowed time (and verification not overdue or not required)
+                              anim = 'none';
+                              bg = 'rgba(16, 185, 129, 0.12)';
+                              border = '1px solid rgba(16, 185, 129, 0.28)';
+                              color = 'var(--success)';
                             }
+
+                            const canExtend = isResultOverdue || isExtraOverdue || isVerificationOverdue;
 
                             return (
                               <span 
                                 key={i} 
                                 onClick={() => {
-                                  if (isOverdue) handleExtendClick(sample);
+                                  if (canExtend) handleExtendClick(sample);
                                 }}
                                 style={{ 
                                   background: bg,
-                                  color: isDone ? 'var(--success)' : 'var(--text-primary)',
-                                  padding: '1px 3px', 
-                                  borderRadius: '2px', 
+                                  color,
+                                  padding: '1px 4px', 
+                                  borderRadius: '3px', 
                                   fontSize: '9px',
-                                  lineHeight: '1.1',
-                                  border: isDone ? '1px solid rgba(16, 185, 129, 0.2)' : '1px solid var(--border-color)',
+                                  lineHeight: '1.2',
+                                  border,
                                   animation: anim,
-                                  cursor: isOverdue ? 'pointer' : 'default'
+                                  cursor: canExtend ? 'pointer' : 'default',
+                                  display: 'inline-flex',
+                                  alignItems: 'center',
+                                  gap: '2px'
                                 }}
-                                title={td.status}
+                                title={`${td.name} [${td.status || 'Received'}]${td.intervalTime ? ` | Result SLA: ${td.intervalTime}m` : ''}${td.intervalTimeVerified ? ` | Verif SLA: ${td.intervalTimeVerified}m` : ' | No Verif SLA'}`}
                               >
-                                {td.name}
-                                {td.delayReason && <span style={{ marginLeft: '3px', fontStyle: 'italic', opacity: 0.8 }}>(Delay: {td.delayReason})</span>}
+                                <span>{td.name}</span>
+                                {td.delayReason && <span style={{ marginLeft: '2px', fontStyle: 'italic', opacity: 0.8 }}>(Delay: {td.delayReason})</span>}
                               </span>
                             );
                           })}
                         </div>
                       ) : (
                         (() => {
-                          let fallbackBg = 'transparent';
-                          let fallbackAnim = 'none';
                           const statusLower = (sample.status || '').toLowerCase();
                           const fallbackIsVerified = statusLower.includes('verified') || statusLower.includes('approved') || statusLower.includes('dispatch') || statusLower.includes('authorized');
                           const fallbackIsDone = fallbackIsVerified || statusLower.includes('done') || statusLower.includes('completed');
 
+                          let fallbackBg = 'transparent';
+                          let fallbackAnim = 'none';
+                          let fallbackBorder = 'none';
+                          let fallbackColor = 'var(--text-primary)';
+
                           if (sample.isVerificationOverdue && !fallbackIsVerified) {
-                              fallbackAnim = 'blinkPurple 1.5s infinite ease-in-out';
-                              fallbackBg = 'rgba(139, 92, 246, 0.2)';
-                          } else if (sample.isResultOverdue && !fallbackIsDone) {
-                              fallbackAnim = 'blinkAlert 1.5s infinite ease-in-out';
-                              fallbackBg = 'rgba(245, 158, 11, 0.2)';
+                            fallbackAnim = 'blinkPurple 1.5s infinite ease-in-out';
+                            fallbackBg = 'rgba(139, 92, 246, 0.22)';
+                            fallbackBorder = '1px solid rgba(139, 92, 246, 0.6)';
+                            fallbackColor = '#a78bfa';
                           } else if (sample.isOverdueAfterExtraTime && !fallbackIsDone) {
-                              fallbackAnim = 'blinkRed 1s infinite ease-in-out';
-                          } else if (sample.isOverdue && !fallbackIsDone) {
-                              fallbackAnim = 'blinkAlert 1s infinite ease-in-out';
+                            fallbackAnim = 'blinkRed 1s infinite ease-in-out';
+                            fallbackBg = 'rgba(239, 68, 68, 0.22)';
+                            fallbackBorder = '1px solid rgba(239, 68, 68, 0.6)';
+                            fallbackColor = '#ef4444';
+                          } else if (sample.isResultOverdue && !fallbackIsDone) {
+                            fallbackAnim = 'blinkAlert 1.5s infinite ease-in-out';
+                            fallbackBg = 'rgba(245, 158, 11, 0.22)';
+                            fallbackBorder = '1px solid rgba(245, 158, 11, 0.6)';
+                            fallbackColor = '#f59e0b';
+                          } else if (fallbackIsDone) {
+                            fallbackBg = 'rgba(16, 185, 129, 0.12)';
+                            fallbackBorder = '1px solid rgba(16, 185, 129, 0.28)';
+                            fallbackColor = 'var(--success)';
                           }
+
+                          const canExtend = sample.isResultOverdue || sample.isVerificationOverdue || sample.isOverdue;
 
                           return (
                             <span 
                               onClick={() => {
-                                if (sample.isOverdue && (!sample.testDetails || sample.testDetails.length === 0)) {
-                                  // If no specific test details, we can't show checkboxes, so we create a dummy one
+                                if (canExtend && (!sample.testDetails || sample.testDetails.length === 0)) {
                                   setExtendModal({ id: sample.id, barcode: sample.barcode, testDetails: [{name: sample.test, status: sample.status}] });
                                   setExtendSelections([sample.test]);
                                   setExtendMins(30);
@@ -1294,12 +1361,14 @@ export default function Dashboard() {
                               style={{ 
                                 animation: fallbackAnim,
                                 background: fallbackBg,
-                                padding: sample.isOverdue || fallbackBg !== 'transparent' ? '1px 3px' : '0',
-                                borderRadius: '2px',
+                                border: fallbackBorder,
+                                color: fallbackColor,
+                                padding: fallbackBg !== 'transparent' ? '1px 4px' : '0',
+                                borderRadius: '3px',
                                 fontSize: '9px',
-                                lineHeight: '1.1',
+                                lineHeight: '1.2',
                                 display: 'inline-block',
-                                cursor: sample.isOverdue ? 'pointer' : 'default'
+                                cursor: canExtend ? 'pointer' : 'default'
                               }}>
                               {sample.test}
                             </span>
