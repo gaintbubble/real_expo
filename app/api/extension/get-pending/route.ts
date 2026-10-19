@@ -23,8 +23,9 @@ export async function GET() {
           },
           {
             OR: [
+              { patientName: '--' }, // Step 1: Immediate fetch of patient and test details
               { nextCheckTime: null },
-              { nextCheckTime: { lte: new Date() } }
+              { nextCheckTime: { lte: new Date() } } // Step 2: Analyzer check gated by trigger delay
             ]
           },
           {
@@ -39,12 +40,16 @@ export async function GET() {
       take: 1 
     });
     
-    // Touch the record so it moves to the back of the queue, preventing it from getting stuck on one barcode
+    // Move to back of queue while preserving any active future trigger timer
     if (samples.length > 0) {
-      await prisma.trackedSample.update({
-        where: { id: samples[0].id },
-        data: { nextCheckTime: new Date() }
-      });
+      const s = samples[0];
+      const hasFutureTrigger = s.nextCheckTime && new Date(s.nextCheckTime).getTime() > Date.now();
+      if (!hasFutureTrigger) {
+        await prisma.trackedSample.update({
+          where: { id: s.id },
+          data: { nextCheckTime: new Date(Date.now() + 60000) }
+        });
+      }
     }
 
     const response = NextResponse.json({ success: true, samples });

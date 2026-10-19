@@ -48,6 +48,14 @@ interface Sample {
   receivedTime: string;
   resultDate: string;
   resultTime: string;
+  rawCreatedAt?: string | null;
+  rawReceivedTime?: string | null;
+  rawResultTime?: string | null;
+  nextCheckTime?: string | null;
+  triggerTime?: number | null;
+  triggerTarget?: string | null;
+  isTriggerPending?: boolean;
+  triggerRemainingSecs?: number;
   target: string;
   delayPercent: number;
   departments?: string[];
@@ -201,7 +209,7 @@ export default function Dashboard() {
   const [receiveModal, setReceiveModal] = useState<string | null>(null);
   const [editModal, setEditModal] = useState<{ id: string, barcode: string } | null>(null);
   const [editInput, setEditInput] = useState('');
-  const [departments, setDepartments] = useState<{id: string, name: string}[]>([]);
+  const [departments, setDepartments] = useState<{id: string, name: string, triggerTime?: number | null, provisionalTime?: number | null}[]>([]);
   const [activeTab, setActiveTab] = useState<string>('');
   const [extendModal, setExtendModal] = useState<{ id: string, barcode: string, testDetails: any[] } | null>(null);
   const [extendSelections, setExtendSelections] = useState<string[]>([]);
@@ -275,8 +283,17 @@ export default function Dashboard() {
         const now = new Date();
 
         const createdAtDate = s.createdAt ? new Date(s.createdAt) : null;
-        const receivedDateObj = s.receivedTime ? new Date(s.receivedTime) : null;
+        const receivedDateObj = s.receivedTime ? new Date(s.receivedTime) : (createdAtDate ? createdAtDate : null);
         const resultDateObj = s.resultTime ? new Date(s.resultTime) : null;
+        const triggerDelayMins = s.triggerTime || 0;
+
+        const triggerTarget = (createdAtDate && triggerDelayMins > 0)
+          ? new Date(createdAtDate.getTime() + triggerDelayMins * 60000)
+          : null;
+        const isTriggerPending = triggerTarget ? (now < triggerTarget) : false;
+        const triggerRemainingSecs = (triggerTarget && isTriggerPending)
+          ? Math.max(0, Math.ceil((triggerTarget.getTime() - now.getTime()) / 1000))
+          : 0;
 
         const statusLower = (s.currentStatus || '').toLowerCase();
 
@@ -373,6 +390,14 @@ export default function Dashboard() {
           receivedTime: formatTimeIST(s.receivedTime),
           resultDate: formatDateIST(s.resultTime),
           resultTime: formatTimeIST(s.resultTime),
+          rawCreatedAt: s.createdAt ? new Date(s.createdAt).toISOString() : null,
+          rawReceivedTime: s.receivedTime ? new Date(s.receivedTime).toISOString() : null,
+          rawResultTime: s.resultTime ? new Date(s.resultTime).toISOString() : null,
+          nextCheckTime: s.nextCheckTime,
+          triggerTime: triggerDelayMins,
+          triggerTarget: triggerTarget ? triggerTarget.toISOString() : null,
+          isTriggerPending,
+          triggerRemainingSecs,
           target: '--',
           delayPercent: 0,
           departments: s.departments || [],
@@ -397,6 +422,13 @@ export default function Dashboard() {
       console.warn("Polling error (Server might be restarting):", error);
     }
   }, [selectedDate]);
+
+  // 1-second live ticker to keep countdowns and timers updating live on screen
+  const [, setLiveTick] = useState(0);
+  useEffect(() => {
+    const timer = setInterval(() => setLiveTick(t => t + 1), 1000);
+    return () => clearInterval(timer);
+  }, []);
 
   useEffect(() => {
     // Initial load
@@ -429,6 +461,53 @@ export default function Dashboard() {
       }
     }, 10);
     
+    const now = new Date();
+    const currentDept = departments.find(d => d.name.toLowerCase() === (activeTab || '').toLowerCase());
+    const delayMins = currentDept?.triggerTime || 0;
+    const defaultTestName = "CBC";
+    const defaultTestDetails = [{
+      name: defaultTestName,
+      status: "Received",
+      intervalTime: 10,
+      intervalTimeVerified: 15,
+      department: activeTab || "HAEMATOLOGY"
+    }];
+
+    // Step 1: Immediate row creation on dashboard in Received status
+    const optimisticSample: Sample = {
+      id: `temp-${Date.now()}`,
+      barcode: currentInput,
+      patient: "--",
+      test: defaultTestName,
+      serviceCd: activeTab ? `DEPT:${activeTab}` : '--',
+      status: "Received",
+      entryDate: formatDateIST(now),
+      entryTime: formatTimeIST(now),
+      receivedDate: formatDateIST(now),
+      receivedTime: formatTimeIST(now),
+      resultDate: '--',
+      resultTime: '--',
+      rawCreatedAt: now.toISOString(),
+      rawReceivedTime: now.toISOString(),
+      rawResultTime: null,
+      triggerTime: delayMins,
+      triggerTarget: delayMins > 0 ? new Date(now.getTime() + delayMins * 60000).toISOString() : null,
+      isTriggerPending: delayMins > 0,
+      triggerRemainingSecs: delayMins * 60,
+      target: '--',
+      delayPercent: 0,
+      departments: activeTab ? [activeTab] : [],
+      isOverdue: false,
+      isOverdueAfterExtraTime: false,
+      testDetails: defaultTestDetails,
+      isTriggerOverdue: false,
+      isResultOverdue: false,
+      isVerificationOverdue: false,
+      isProvisional: false,
+    };
+
+    setSamples(prev => [optimisticSample, ...prev.filter(s => s.barcode !== currentInput)]);
+
     try {
       const res = await fetch('/api/save-barcode', {
         method: 'POST',
@@ -438,26 +517,18 @@ export default function Dashboard() {
       const response = await res.json();
       
       if (response.success) {
-        const delayMins = response.triggerDelayMins || 0;
-        setScanNotice({ barcode: currentInput, delayMins });
+        const triggerDelay = response.triggerDelayMins ?? delayMins;
+        setScanNotice({ barcode: currentInput, delayMins: triggerDelay });
         setTimeout(() => setScanNotice(null), 5000);
-
-        if (delayMins === 0) {
-          // If no delay, trigger early reload
-          setTimeout(() => {
-            getAllTrackedSamples(selectedDate).then(data => {
-              if (Array.isArray(data)) {
-                loadRealData();
-              }
-            });
-          }, 1000);
-        }
+        await loadRealData();
       } else {
         alert(response.message || "Failed to save barcode.");
+        await loadRealData();
       }
     } catch (error) {
       console.error("Scan error:", error);
       alert("Error saving barcode.");
+      await loadRealData();
     } finally {
       setIsScanning(false);
     }
@@ -671,8 +742,9 @@ export default function Dashboard() {
 
   const getStatusClass = (status: string) => {
     const s = status.toLowerCase();
+    if (s.includes('received')) return 'received';
     if (s.includes('pending')) return 'pending';
-    if (s.includes('completed') || s.includes('done') || s.includes('verified')) return 'completed';
+    if (s.includes('completed') || s.includes('done') || s.includes('verified') || s.includes('approved')) return 'completed';
     if (s.includes('collected') || s.includes('batch generated')) return 'collected';
     return 'default';
   };
@@ -1476,7 +1548,40 @@ export default function Dashboard() {
                       </div>
                     </td>
                     <td style={{ textAlign: 'center' }}>
-                      <div style={{ display: 'flex', justifyContent: 'center', gap: '2px', alignItems: 'center' }}>
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: '3px', alignItems: 'center' }}>
+                        {(() => {
+                          const nowMs = Date.now();
+                          const scanMs = sample.rawCreatedAt ? new Date(sample.rawCreatedAt).getTime() : 0;
+                          const trigMins = sample.triggerTime || 0;
+                          const trigTargetMs = scanMs + trigMins * 60000;
+                          const isTrigActive = trigMins > 0 && scanMs > 0 && nowMs < trigTargetMs;
+                          const remSecs = isTrigActive ? Math.ceil((trigTargetMs - nowMs) / 1000) : 0;
+
+                          if (isTrigActive) {
+                            const mins = Math.floor(remSecs / 60);
+                            const secs = remSecs % 60;
+                            return (
+                              <span 
+                                style={{
+                                  fontSize: '7.5px',
+                                  fontWeight: 700,
+                                  background: 'rgba(59, 130, 246, 0.15)',
+                                  color: 'var(--accent-primary)',
+                                  border: '1px solid rgba(59, 130, 246, 0.35)',
+                                  borderRadius: '3px',
+                                  padding: '1px 4px',
+                                  lineHeight: '1.1',
+                                  whiteSpace: 'nowrap'
+                                }}
+                                title={`Trigger delay countdown: Result polling begins in ${mins}m ${secs}s`}
+                              >
+                                ⏳ {mins}:{String(secs).padStart(2, '0')}
+                              </span>
+                            );
+                          }
+                          return null;
+                        })()}
+                        <div style={{ display: 'flex', justifyContent: 'center', gap: '2px', alignItems: 'center' }}>
                         <button 
                           onClick={() => handleFalseTrigger(sample.id, 'trigger')}
                           style={{ background: 'var(--bg-tertiary)', border: '1px solid var(--border-color)', borderRadius: '2px', padding: '0px 3px', fontSize: '8px', fontWeight: 'bold', cursor: 'pointer', lineHeight: '1.2' }}
@@ -1521,7 +1626,8 @@ export default function Dashboard() {
                           {sample.isProvisional ? 'P ON' : 'P'}
                         </button>
                       </div>
-                    </td>
+                    </div>
+                  </td>
                   </tr>
                 ))}
               </tbody>

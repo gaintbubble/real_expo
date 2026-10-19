@@ -15,28 +15,60 @@ export async function saveBarcodeToDatabase(barcode: string, activeTab?: string)
 
     const scanTime = new Date();
     let triggerDelayMins = 0;
+    let defaultTestName = "Waiting...";
+    let defaultTestDetails: any[] = [];
+    let serviceCd = activeTab ? `DEPT:${activeTab}` : undefined;
 
     if (activeTab) {
-      const depts = await prisma.department.findMany();
+      const depts = await prisma.department.findMany({
+        include: { tests: true }
+      });
       const activeDept = depts.find(d => d.name.toLowerCase() === activeTab.toLowerCase());
-      if (activeDept && activeDept.triggerTime != null && activeDept.triggerTime > 0) {
-        triggerDelayMins = activeDept.triggerTime;
+      if (activeDept) {
+        if (activeDept.triggerTime != null && activeDept.triggerTime > 0) {
+          triggerDelayMins = activeDept.triggerTime;
+        }
+        if (activeDept.tests && activeDept.tests.length > 0) {
+          const matchedTest = activeDept.tests.find(t => 
+            t.testName.toLowerCase().includes('cbc') || 
+            (t.shortName && t.shortName.toLowerCase().includes('cbc'))
+          ) || activeDept.tests[0];
+
+          defaultTestName = matchedTest.shortName || matchedTest.testName;
+          serviceCd = matchedTest.serviceCd || serviceCd;
+          defaultTestDetails = [{
+            name: matchedTest.shortName || matchedTest.testName,
+            status: "Received",
+            serviceCd: matchedTest.serviceCd,
+            intervalTime: matchedTest.intervalTime,
+            intervalTimeVerified: matchedTest.intervalTimeVerified,
+            department: activeDept.name
+          }];
+        }
       }
     }
 
-    // Enforce trigger delay starting from exact scan time
+    // Delayed Check: The trigger timer (2, 3, or 5 mins) only gates the background status polling
     const nextCheckTime = new Date(scanTime.getTime() + triggerDelayMins * 60000);
-    let serviceCd = activeTab ? `DEPT:${activeTab}` : undefined;
 
     const sample = await prisma.trackedSample.create({
       data: {
         barcode: barcode,
-        currentStatus: "Pending LIS Search",
-        testName: "Waiting...",
+        currentStatus: "Received", // Immediate creation in Received status
+        receivedTime: scanTime,    // Sample received timestamp recorded immediately
+        testName: defaultTestName,
         patientName: "--",
         serviceCd: serviceCd,
+        testDetails: defaultTestDetails.length > 0 ? JSON.stringify(defaultTestDetails) : undefined,
         createdAt: scanTime,
-        nextCheckTime: nextCheckTime
+        nextCheckTime: nextCheckTime // Gated trigger delay for result status check
+      }
+    });
+
+    await prisma.statusHistory.create({
+      data: {
+        sampleId: sample.id,
+        status: "Received"
       }
     });
 
@@ -73,17 +105,6 @@ export async function getAllTrackedSamples(dateStr?: string) {
       take: dateStr ? undefined : 1000
     });
 
-    // Enforce Trigger Delay: Only after trigger duration has elapsed should scanned samples be displayed on dashboard
-    const now = new Date();
-    const readySamples = samples.filter(s => {
-      if (s.currentStatus === 'Pending LIS Search' && s.nextCheckTime) {
-        if (now < new Date(s.nextCheckTime)) {
-          return false; // Still within trigger delay, do not display on dashboard yet
-        }
-      }
-      return true;
-    });
-
     const departmentsList = await prisma.department.findMany();
     const deptMap = new Map(departmentsList.map(d => [d.name.toLowerCase(), { name: d.name, triggerTime: d.triggerTime, provisionalTime: d.provisionalTime }]));
 
@@ -118,7 +139,7 @@ export async function getAllTrackedSamples(dateStr?: string) {
       }
     });
 
-    return readySamples.map(s => {
+    return samples.map(s => {
       let minTriggerTime = Infinity;
       let minProvisionalTime = Infinity;
       let minIntervalTime = Infinity;
@@ -212,6 +233,7 @@ export async function getAllTrackedSamples(dateStr?: string) {
         intervalTimeVerified: minIntervalTimeVerified === Infinity ? null : minIntervalTimeVerified,
         isProvisional: Boolean(s.isProvisional),
         provisionalExpiry: s.provisionalExpiry ? s.provisionalExpiry.toISOString() : null,
+        nextCheckTime: s.nextCheckTime ? s.nextCheckTime.toISOString() : null,
       };
     });
   } catch (error) {

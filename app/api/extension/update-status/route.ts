@@ -98,10 +98,9 @@ export async function POST(request: Request) {
         updateCheckTime = true;
       } else if (s.includes('received')) {
         isCompleted = false;
-        if (statusChanged) {
-          const baseTime = receivedTimeValue ? receivedTimeValue.getTime() : Date.now();
-          expectedEndTime = new Date(baseTime + intervalTime * 60000);
-          nextCheckTime = expectedEndTime.getTime() < Date.now() ? new Date(Date.now() + 60000) : expectedEndTime;
+        const existingNext = existingSample?.nextCheckTime ? new Date(existingSample.nextCheckTime).getTime() : 0;
+        if (existingNext > Date.now()) {
+          nextCheckTime = new Date(existingNext);
         } else {
           nextCheckTime = new Date(Date.now() + 60000);
         }
@@ -114,10 +113,9 @@ export async function POST(request: Request) {
         updateCheckTime = true;
       } else if (s.includes('received')) {
         isCompleted = false;
-        if (statusChanged) {
-          const baseTime = receivedTimeValue ? receivedTimeValue.getTime() : Date.now();
-          expectedEndTime = new Date(baseTime + intervalTime * 60000);
-          nextCheckTime = expectedEndTime.getTime() < Date.now() ? new Date(Date.now() + 60000) : expectedEndTime;
+        const existingNext = existingSample?.nextCheckTime ? new Date(existingSample.nextCheckTime).getTime() : 0;
+        if (existingNext > Date.now()) {
+          nextCheckTime = new Date(existingNext);
         } else {
           nextCheckTime = new Date(Date.now() + 60000);
         }
