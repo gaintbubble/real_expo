@@ -3,7 +3,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { getTestConfigs, addTestConfig, removeTestConfig, bulkAddTestConfigs, updateTestConfig, clearAllTestConfigs } from '../actions/testConfigs';
 import { getDepartments, addDepartment } from '../actions/departments';
-import { ClipboardList, Trash2, Upload, Edit2, X } from 'lucide-react';
+import { ClipboardList, Trash2, Upload, Edit2, X, Search, Filter } from 'lucide-react';
 import * as XLSX from 'xlsx';
 
 interface Department {
@@ -26,6 +26,8 @@ export default function TestConfigPage() {
   const [configs, setConfigs] = useState<TestConfig[]>([]);
   const [departments, setDepartments] = useState<Department[]>([]);
   const [loading, setLoading] = useState(false);
+  const [searchQuery, setSearchQuery] = useState('');
+  const [deptFilter, setDeptFilter] = useState('ALL');
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   // Form state
@@ -204,6 +206,19 @@ export default function TestConfigPage() {
     fontSize: '12px'
   };
 
+  const filteredConfigs = configs.filter(config => {
+    if (deptFilter !== 'ALL' && config.departmentId !== deptFilter) {
+      return false;
+    }
+    if (!searchQuery.trim()) return true;
+    const q = searchQuery.toLowerCase().trim();
+    const matchName = config.testName?.toLowerCase().includes(q);
+    const matchShort = config.shortName?.toLowerCase().includes(q);
+    const matchCd = config.serviceCd?.toLowerCase().includes(q);
+    const matchDept = config.department?.name?.toLowerCase().includes(q);
+    return Boolean(matchName || matchShort || matchCd || matchDept);
+  });
+
   return (
     <div className="dashboard-container">
       <div className="scanner-card" style={{ marginBottom: '2rem', padding: '1.5rem', alignItems: 'flex-start', overflowX: 'auto', border: editingId ? '1px solid var(--warning)' : '1px solid var(--glass-border)' }}>
@@ -337,6 +352,122 @@ export default function TestConfigPage() {
         </form>
       </div>
 
+      {/* Search and Filter Bar */}
+      <div style={{ 
+        display: 'flex', 
+        justifyContent: 'space-between', 
+        alignItems: 'center', 
+        gap: '12px', 
+        marginBottom: '1rem', 
+        flexWrap: 'wrap' 
+      }}>
+        {/* Search Input Bar */}
+        <div style={{
+          display: 'flex',
+          alignItems: 'center',
+          background: 'var(--bg-secondary)',
+          border: '1px solid var(--border-color)',
+          borderRadius: '8px',
+          padding: '4px 10px',
+          flex: '1 1 320px',
+          maxWidth: '460px',
+          height: '32px',
+          position: 'relative'
+        }}>
+          <Search size={14} style={{ color: 'var(--text-secondary)', marginRight: '8px', flexShrink: 0 }} />
+          <input 
+            type="text"
+            placeholder="Search tests by name, short name, service code, or department..."
+            value={searchQuery}
+            onChange={(e) => setSearchQuery(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === 'Escape') setSearchQuery('');
+            }}
+            style={{
+              background: 'transparent',
+              border: 'none',
+              color: 'var(--text-primary)',
+              fontSize: '12px',
+              width: '100%',
+              outline: 'none',
+              fontFamily: 'inherit'
+            }}
+          />
+          {searchQuery && (
+            <button 
+              type="button" 
+              onClick={() => setSearchQuery('')}
+              style={{
+                background: 'transparent',
+                border: 'none',
+                color: 'var(--text-secondary)',
+                cursor: 'pointer',
+                display: 'flex',
+                alignItems: 'center',
+                padding: '2px',
+                marginLeft: '4px'
+              }}
+              title="Clear search"
+            >
+              <X size={13} />
+            </button>
+          )}
+        </div>
+
+        {/* Department Filter & Counts */}
+        <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+          <div style={{
+            display: 'flex',
+            alignItems: 'center',
+            gap: '6px',
+            background: 'var(--bg-secondary)',
+            border: '1px solid var(--border-color)',
+            borderRadius: '8px',
+            padding: '4px 8px',
+            height: '32px'
+          }}>
+            <Filter size={13} style={{ color: 'var(--text-secondary)', flexShrink: 0 }} />
+            <select
+              value={deptFilter}
+              onChange={(e) => setDeptFilter(e.target.value)}
+              style={{
+                background: 'transparent',
+                border: 'none',
+                color: 'var(--text-primary)',
+                fontSize: '11px',
+                outline: 'none',
+                cursor: 'pointer'
+              }}
+            >
+              <option value="ALL" style={{ background: 'var(--bg-secondary)', color: 'var(--text-primary)' }}>All Departments</option>
+              {departments.map(d => (
+                <option key={d.id} value={d.id} style={{ background: 'var(--bg-secondary)', color: 'var(--text-primary)' }}>
+                  {d.name}
+                </option>
+              ))}
+            </select>
+          </div>
+
+          <span style={{
+            fontSize: '11.5px',
+            color: 'var(--text-secondary)',
+            fontWeight: 500,
+            whiteSpace: 'nowrap',
+            padding: '4px 10px',
+            background: 'var(--bg-secondary)',
+            border: '1px solid var(--border-color)',
+            borderRadius: '8px',
+            height: '32px',
+            display: 'flex',
+            alignItems: 'center'
+          }}>
+            {filteredConfigs.length === configs.length 
+              ? `Total Tests: ${configs.length}` 
+              : `Showing ${filteredConfigs.length} of ${configs.length}`}
+          </span>
+        </div>
+      </div>
+
       <section className="samples-section">
         <div className="table-container" style={{ overflowX: 'auto' }}>
           <table className="samples-table" style={{ fontSize: '13px' }}>
@@ -352,14 +483,39 @@ export default function TestConfigPage() {
               </tr>
             </thead>
             <tbody>
-              {configs.length === 0 ? (
+              {filteredConfigs.length === 0 ? (
                 <tr>
                   <td colSpan={7} style={{ textAlign: 'center', padding: '2rem', color: 'var(--text-secondary)' }}>
-                    No test configurations found. Add one above or upload an Excel file.
+                    {configs.length === 0 ? (
+                      "No test configurations found. Add one above or upload an Excel file."
+                    ) : (
+                      <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '8px' }}>
+                        <span>
+                          No test configurations match "{searchQuery}"{deptFilter !== 'ALL' ? ' in the selected department' : ''}.
+                        </span>
+                        <button
+                          type="button"
+                          onClick={() => { setSearchQuery(''); setDeptFilter('ALL'); }}
+                          style={{
+                            background: 'var(--bg-tertiary)',
+                            border: '1px solid var(--border-color)',
+                            color: 'var(--accent-primary)',
+                            borderRadius: '4px',
+                            padding: '4px 12px',
+                            fontSize: '11px',
+                            fontWeight: 600,
+                            cursor: 'pointer',
+                            marginTop: '4px'
+                          }}
+                        >
+                          Clear Search & Filters
+                        </button>
+                      </div>
+                    )}
                   </td>
                 </tr>
               ) : (
-                configs.map((config) => (
+                filteredConfigs.map((config) => (
                   <tr key={config.id} className={`table-row ${editingId === config.id ? 'status-waiting' : ''}`}>
                     <td className="info-value">{config.testName}</td>
                     <td>
