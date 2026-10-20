@@ -68,6 +68,9 @@ interface Sample {
   isProvisional?: boolean;
   provisionalTime?: number | null;
   provisionalExpiry?: string | null;
+  intervalTime?: number | null;
+  intervalTimeVerified?: number | null;
+  isCompleted?: boolean;
 }
 
 export function getSampleStageInfo(sample: Sample) {
@@ -151,6 +154,199 @@ export function getSampleStageInfo(sample: Sample) {
     needsResultVerified,
     needsResultApproval,
   };
+}
+
+export interface TriggerCountdownState {
+  phase: 'initial_check' | 'result_due' | 'verify_due' | 'completed';
+  label: string;
+  formattedTime: string;
+  isOverdue: boolean;
+  bg: string;
+  color: string;
+  border: string;
+}
+
+export function getTriggerCountdownState(sample: Sample, nowMs: number): TriggerCountdownState {
+  const sLower = (sample.status || '').toLowerCase();
+
+  // 1. Completed State:
+  // Active when test reaches Verified, Approved, Authorized, Dispatch, or isCompleted is true
+  const isVerified = Boolean(
+    sample.isCompleted ||
+    sLower.includes('verified') ||
+    sLower.includes('approved') ||
+    sLower.includes('authorized') ||
+    sLower.includes('dispatch')
+  );
+
+  if (isVerified) {
+    return {
+      phase: 'completed',
+      label: 'Completed',
+      formattedTime: '',
+      isOverdue: false,
+      bg: 'rgba(16, 185, 129, 0.12)',
+      color: '#10b981',
+      border: '1px solid rgba(16, 185, 129, 0.3)'
+    };
+  }
+
+  // Detect if verification SLA is configured
+  let hasVerificationSla = false;
+  let verifSlaMins = 0;
+  if (sample.intervalTimeVerified != null && sample.intervalTimeVerified > 0) {
+    hasVerificationSla = true;
+    verifSlaMins = sample.intervalTimeVerified;
+  } else if (sample.testDetails && Array.isArray(sample.testDetails)) {
+    const validVerifs = sample.testDetails
+      .map((t: any) => t.intervalTimeVerified)
+      .filter((v: any) => typeof v === 'number' && v > 0);
+    if (validVerifs.length > 0) {
+      hasVerificationSla = true;
+      verifSlaMins = Math.min(...validVerifs);
+    }
+  }
+
+  // 2. Result Done Phase:
+  const isResultDone = sLower.includes('result done') || sLower.includes('done') || sLower.includes('completed');
+  if (isResultDone) {
+    if (!hasVerificationSla) {
+      // Reached Result Done status with NO verification time configured -> Completed!
+      return {
+        phase: 'completed',
+        label: 'Completed',
+        formattedTime: '',
+        isOverdue: false,
+        bg: 'rgba(16, 185, 129, 0.12)',
+        color: '#10b981',
+        border: '1px solid rgba(16, 185, 129, 0.3)'
+      };
+    }
+
+    // Phase 3: Verification Countdown
+    const resultBaseMs = sample.rawResultTime
+      ? new Date(sample.rawResultTime).getTime()
+      : (sample.rawReceivedTime ? new Date(sample.rawReceivedTime).getTime() : nowMs);
+
+    const safeResultBaseMs = isNaN(resultBaseMs) ? nowMs : resultBaseMs;
+    const targetMs = safeResultBaseMs + (verifSlaMins || 15) * 60000;
+    const diffSecs = Math.floor((targetMs - nowMs) / 1000);
+
+    if (diffSecs >= 0) {
+      const mins = Math.floor(diffSecs / 60);
+      const secs = diffSecs % 60;
+      return {
+        phase: 'verify_due',
+        label: 'Verify Due',
+        formattedTime: `${String(mins).padStart(2, '0')}:${String(secs).padStart(2, '0')}`,
+        isOverdue: false,
+        bg: 'rgba(168, 85, 247, 0.12)',
+        color: '#a855f7',
+        border: '1px solid rgba(168, 85, 247, 0.3)'
+      };
+    } else {
+      const overdueSecs = Math.abs(diffSecs);
+      const mins = Math.floor(overdueSecs / 60);
+      const secs = overdueSecs % 60;
+      return {
+        phase: 'verify_due',
+        label: 'Verify Overdue',
+        formattedTime: `-${String(mins).padStart(2, '0')}:${String(secs).padStart(2, '0')}`,
+        isOverdue: true,
+        bg: 'rgba(239, 68, 68, 0.14)',
+        color: '#ef4444',
+        border: '1px solid rgba(239, 68, 68, 0.4)'
+      };
+    }
+  }
+
+  // 3. Phase 1: Initial Check Countdown (Scanned / Pending Check)
+  const isPreCheck = sLower.includes('pending check') || sLower.includes('scanned') || sLower.includes('waiting');
+  const trigMins = sample.triggerTime ?? (sample.departments?.some(d => d.toLowerCase() === 'haematology') ? 2 : 0);
+  const scanMs = sample.rawCreatedAt ? new Date(sample.rawCreatedAt).getTime() : 0;
+  const safeScanMs = isNaN(scanMs) ? 0 : scanMs;
+  const trigTargetMs = (safeScanMs > 0 && trigMins > 0) ? (safeScanMs + trigMins * 60000) : 0;
+  const isTrigActive = trigTargetMs > 0 && nowMs < trigTargetMs;
+
+  if (isPreCheck || isTrigActive) {
+    const targetMs = trigTargetMs > 0 ? trigTargetMs : (nowMs + 120000);
+    const diffSecs = Math.ceil((targetMs - nowMs) / 1000);
+
+    if (diffSecs > 0) {
+      const mins = Math.floor(diffSecs / 60);
+      const secs = diffSecs % 60;
+      return {
+        phase: 'initial_check',
+        label: 'Initial Check',
+        formattedTime: `${String(mins).padStart(2, '0')}:${String(secs).padStart(2, '0')}`,
+        isOverdue: false,
+        bg: 'rgba(59, 130, 246, 0.12)',
+        color: 'var(--accent-primary)',
+        border: '1px solid rgba(59, 130, 246, 0.3)'
+      };
+    } else {
+      return {
+        phase: 'initial_check',
+        label: 'Initial Check',
+        formattedTime: '00:00',
+        isOverdue: false,
+        bg: 'rgba(59, 130, 246, 0.15)',
+        color: 'var(--accent-primary)',
+        border: '1px solid rgba(59, 130, 246, 0.4)'
+      };
+    }
+  }
+
+  // 4. Phase 2: Result Done Countdown (Received status, waiting for results)
+  const receivedMs = sample.rawReceivedTime
+    ? new Date(sample.rawReceivedTime).getTime()
+    : (sample.rawCreatedAt ? new Date(sample.rawCreatedAt).getTime() : nowMs);
+
+  const safeReceivedMs = isNaN(receivedMs) ? nowMs : receivedMs;
+
+  let resultSlaMins = sample.intervalTime || 30;
+  let extraMins = 0;
+  if (sample.testDetails && Array.isArray(sample.testDetails) && sample.testDetails.length > 0) {
+    const validIntervals = sample.testDetails
+      .map((t: any) => t.intervalTime)
+      .filter((v: any) => typeof v === 'number' && v > 0);
+    if (validIntervals.length > 0) resultSlaMins = Math.min(...validIntervals);
+
+    const validExtras = sample.testDetails
+      .map((t: any) => t.extraTime)
+      .filter((v: any) => typeof v === 'number' && v > 0);
+    if (validExtras.length > 0) extraMins = Math.max(0, ...validExtras);
+  }
+
+  const targetMs = safeReceivedMs + (resultSlaMins + extraMins) * 60000;
+  const diffSecs = Math.floor((targetMs - nowMs) / 1000);
+
+  if (diffSecs >= 0) {
+    const mins = Math.floor(diffSecs / 60);
+    const secs = diffSecs % 60;
+    return {
+      phase: 'result_due',
+      label: 'Result Due',
+      formattedTime: `${String(mins).padStart(2, '0')}:${String(secs).padStart(2, '0')}`,
+      isOverdue: false,
+      bg: 'rgba(245, 158, 11, 0.12)',
+      color: '#f59e0b',
+      border: '1px solid rgba(245, 158, 11, 0.3)'
+    };
+  } else {
+    const overdueSecs = Math.abs(diffSecs);
+    const mins = Math.floor(overdueSecs / 60);
+    const secs = overdueSecs % 60;
+    return {
+      phase: 'result_due',
+      label: 'Result Overdue',
+      formattedTime: `-${String(mins).padStart(2, '0')}:${String(secs).padStart(2, '0')}`,
+      isOverdue: true,
+      bg: 'rgba(239, 68, 68, 0.14)',
+      color: '#ef4444',
+      border: '1px solid rgba(239, 68, 68, 0.4)'
+    };
+  }
 }
 
 export default function Dashboard() {
@@ -402,6 +598,8 @@ export default function Dashboard() {
           triggerTarget: triggerTarget ? triggerTarget.toISOString() : null,
           isTriggerPending,
           triggerRemainingSecs,
+          intervalTime: s.intervalTime ?? (testDetails.length > 0 ? Math.min(...testDetails.map((t: any) => t.intervalTime || 30)) : 30),
+          intervalTimeVerified: s.intervalTimeVerified !== undefined ? s.intervalTimeVerified : (testDetails.length > 0 && testDetails.some((t: any) => t.intervalTimeVerified != null) ? Math.min(...testDetails.filter((t: any) => t.intervalTimeVerified != null).map((t: any) => t.intervalTimeVerified)) : null),
           target: '--',
           delayPercent: 0,
           departments: s.departments || [],
@@ -419,6 +617,7 @@ export default function Dashboard() {
           isProvisional: Boolean(s.isProvisional),
           provisionalTime: s.provisionalTime,
           provisionalExpiry: s.provisionalExpiry,
+          isCompleted: Boolean(s.isCompleted),
         };
       });
       setSamples(formattedSamples);
@@ -503,6 +702,8 @@ export default function Dashboard() {
       triggerTarget: delayMins > 0 ? new Date(now.getTime() + delayMins * 60000).toISOString() : null,
       isTriggerPending: delayMins > 0,
       triggerRemainingSecs: delayMins * 60,
+      intervalTime: 10,
+      intervalTimeVerified: 15,
       target: '--',
       delayPercent: 0,
       departments: [effectiveDept],
@@ -513,6 +714,7 @@ export default function Dashboard() {
       isResultOverdue: false,
       isVerificationOverdue: false,
       isProvisional: false,
+      isCompleted: false,
     };
 
     setSamples(prev => [optimisticSample, ...prev.filter(s => s.barcode !== currentInput)]);
@@ -1313,7 +1515,7 @@ export default function Dashboard() {
                   <th style={{ width: '70px' }}>Result Time</th>
                   <th style={{ width: '90px' }}>Status</th>
                   <th style={{ width: '95px', textAlign: 'center' }}>Actions</th>
-                  <th style={{ width: '74px', textAlign: 'center' }}>Triger</th>
+                  <th style={{ width: '94px', textAlign: 'center' }}>Trigger</th>
                 </tr>
               </thead>
               <tbody>
@@ -1587,87 +1789,71 @@ export default function Dashboard() {
                         </button>
                       </div>
                     </td>
-                    <td style={{ textAlign: 'center' }}>
-                      <div style={{ display: 'flex', flexDirection: 'column', gap: '3px', alignItems: 'center' }}>
-                        {(() => {
-                          const nowMs = Date.now();
-                          const scanMs = sample.rawCreatedAt ? new Date(sample.rawCreatedAt).getTime() : 0;
-                          const trigMins = sample.triggerTime || 0;
-                          const trigTargetMs = scanMs + trigMins * 60000;
-                          const isTrigActive = trigMins > 0 && scanMs > 0 && nowMs < trigTargetMs;
-                          const remSecs = isTrigActive ? Math.ceil((trigTargetMs - nowMs) / 1000) : 0;
-
-                          if (isTrigActive) {
-                            const mins = Math.floor(remSecs / 60);
-                            const secs = remSecs % 60;
-                            return (
-                              <span 
-                                style={{
-                                  fontSize: '7.5px',
-                                  fontWeight: 700,
-                                  background: 'rgba(59, 130, 246, 0.15)',
-                                  color: 'var(--accent-primary)',
-                                  border: '1px solid rgba(59, 130, 246, 0.35)',
-                                  borderRadius: '3px',
-                                  padding: '1px 4px',
-                                  lineHeight: '1.1',
-                                  whiteSpace: 'nowrap'
-                                }}
-                                title={`Trigger delay countdown: Result polling begins in ${mins}m ${secs}s`}
-                              >
-                                ⏳ {mins}:{String(secs).padStart(2, '0')}
+                    <td style={{ textAlign: 'center', width: '94px' }}>
+                      {(() => {
+                        const state = getTriggerCountdownState(sample, Date.now());
+                        return (
+                          <div 
+                            style={{ 
+                              display: 'inline-flex', 
+                              flexDirection: 'column', 
+                              alignItems: 'center', 
+                              justifyContent: 'center',
+                              background: state.bg,
+                              border: state.border,
+                              borderRadius: '4px',
+                              padding: '2px 5px',
+                              minWidth: '82px',
+                              boxSizing: 'border-box',
+                              lineHeight: '1.15',
+                              userSelect: 'none'
+                            }}
+                            title={`Status: ${sample.status}${state.formattedTime ? ` | Remaining: ${state.formattedTime}` : ''} | Stage: ${state.label}`}
+                          >
+                            {state.phase === 'completed' ? (
+                              <span style={{
+                                fontSize: '9.5px',
+                                fontWeight: 600,
+                                color: state.color,
+                                display: 'inline-flex',
+                                alignItems: 'center',
+                                gap: '3px',
+                                whiteSpace: 'nowrap'
+                              }}>
+                                <span style={{ fontSize: '10px' }}>✓</span>
+                                <span>Completed</span>
                               </span>
-                            );
-                          }
-                          return null;
-                        })()}
-                        <div style={{ display: 'flex', justifyContent: 'center', gap: '2px', alignItems: 'center' }}>
-                        <button 
-                          onClick={() => handleFalseTrigger(sample.id, 'trigger')}
-                          style={{ background: 'var(--bg-tertiary)', border: '1px solid var(--border-color)', borderRadius: '2px', padding: '0px 3px', fontSize: '8px', fontWeight: 'bold', cursor: 'pointer', lineHeight: '1.2' }}
-                          title="Trigger Time"
-                        >
-                          T
-                        </button>
-                        <button 
-                          onClick={() => handleFalseTrigger(sample.id, 'result')}
-                          style={{ background: 'var(--bg-tertiary)', border: '1px solid var(--border-color)', borderRadius: '2px', padding: '0px 3px', fontSize: '8px', fontWeight: 'bold', cursor: 'pointer', lineHeight: '1.2' }}
-                          title="Result Time"
-                        >
-                          R
-                        </button>
-                        <button 
-                          onClick={() => handleFalseTrigger(sample.id, 'verification')}
-                          style={{ background: 'var(--bg-tertiary)', border: '1px solid var(--border-color)', borderRadius: '2px', padding: '0px 3px', fontSize: '8px', fontWeight: 'bold', cursor: 'pointer', lineHeight: '1.2' }}
-                          title="Verification Time"
-                        >
-                          V
-                        </button>
-                        <button 
-                          onClick={() => handleToggleProvisional(sample.id)}
-                          disabled={togglingProvisional === sample.id}
-                          style={{ 
-                            background: sample.isProvisional ? '#8b5cf6' : 'var(--bg-tertiary)', 
-                            color: sample.isProvisional ? '#ffffff' : 'var(--text-secondary)',
-                            border: sample.isProvisional ? '1px solid #7c3aed' : '1px solid var(--border-color)', 
-                            borderRadius: '2px', 
-                            padding: '0px 3px', 
-                            fontSize: '8px', 
-                            fontWeight: 'bold', 
-                            cursor: 'pointer', 
-                            lineHeight: '1.2',
-                            boxShadow: sample.isProvisional ? '0 0 4px rgba(139, 92, 246, 0.4)' : 'none',
-                            opacity: togglingProvisional === sample.id ? 0.6 : 1
-                          }}
-                          title={sample.isProvisional 
-                            ? `Provisional ON (checking paused). Click to Turn OFF${sample.provisionalExpiry ? ` (Expires ${formatTimeIST(sample.provisionalExpiry)})` : ''}` 
-                            : `Provisional OFF. Click to Turn ON (Pause checking for ${sample.provisionalTime || 60}m)`}
-                        >
-                          {sample.isProvisional ? 'P ON' : 'P'}
-                        </button>
-                      </div>
-                    </div>
-                  </td>
+                            ) : (
+                              <>
+                                <span style={{
+                                  fontSize: '10px',
+                                  fontWeight: 700,
+                                  fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace',
+                                  color: state.color,
+                                  letterSpacing: '0.4px',
+                                  whiteSpace: 'nowrap',
+                                  lineHeight: '1.1'
+                                }}>
+                                  {state.formattedTime}
+                                </span>
+                                <span style={{
+                                  fontSize: '7px',
+                                  fontWeight: 700,
+                                  color: state.color,
+                                  opacity: 0.9,
+                                  textTransform: 'uppercase',
+                                  letterSpacing: '0.3px',
+                                  whiteSpace: 'nowrap',
+                                  lineHeight: '1'
+                                }}>
+                                  {state.label}
+                                </span>
+                              </>
+                            )}
+                          </div>
+                        );
+                      })()}
+                    </td>
                   </tr>
                 ))}
               </tbody>
