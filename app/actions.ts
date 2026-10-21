@@ -2,11 +2,23 @@
 
 import prisma from './lib/prisma';
 import { getISTStartAndEndOfDay } from './lib/dateUtils';
+import { normalizeStatus, isBatchSample } from './lib/statusUtils';
 
 export async function saveBarcodeToDatabase(barcode: string, activeTab?: string) {
   try {
+    let cleanBarcode = barcode.trim();
+    let requestedTests: string[] = [];
+    if (cleanBarcode.includes(':')) {
+      const parts = cleanBarcode.split(':');
+      cleanBarcode = parts[0].trim();
+      const testsPart = parts.slice(1).join(':').trim();
+      if (testsPart) {
+        requestedTests = testsPart.split(',').map(t => t.trim()).filter(Boolean);
+      }
+    }
+
     const existing = await prisma.trackedSample.findUnique({
-      where: { barcode: barcode }
+      where: { barcode: cleanBarcode }
     });
 
     if (existing) {
@@ -38,39 +50,84 @@ export async function saveBarcodeToDatabase(barcode: string, activeTab?: string)
       triggerDelayMins = 2;
     }
 
-    let defaultTestName = "Resolving...";
-    let serviceCd = `DEPT:${activeDept ? activeDept.name : effectiveDeptName}`;
-    let defaultTestDetails = [{
-      name: defaultTestName,
-      status: "Pending Check",
-      serviceCd: undefined,
-      intervalTime: 30,
-      intervalTimeVerified: null,
-      department: activeDept ? activeDept.name : effectiveDeptName
-    }];
+    // Resolve order test configs
+    const allConfigs = await prisma.testConfig.findMany({
+      include: { department: true }
+    });
 
-    // Delayed Check: The trigger timer strictly gates the background status check.
-    // Trigger time is calculated from the exact scan time.
+    let resolvedTestDetails: any[] = [];
+    let serviceCds: string[] = [];
+    let displayTestNames: string[] = [];
+
+    if (requestedTests.length > 0) {
+      for (const reqName of requestedTests) {
+        const lowerReq = reqName.toLowerCase();
+        const matchedCfg = allConfigs.find(c => 
+          (c.shortName && c.shortName.toLowerCase() === lowerReq) ||
+          (c.testName && c.testName.toLowerCase() === lowerReq) ||
+          (c.serviceCd && c.serviceCd.toLowerCase() === lowerReq)
+        );
+
+        if (matchedCfg) {
+          const testLabel = matchedCfg.shortName || matchedCfg.testName;
+          resolvedTestDetails.push({
+            name: testLabel,
+            testName: matchedCfg.testName,
+            shortName: matchedCfg.shortName,
+            serviceCd: matchedCfg.serviceCd || undefined,
+            status: "Pending Check",
+            intervalTime: matchedCfg.intervalTime || 10,
+            intervalTimeVerified: matchedCfg.intervalTimeVerified ?? null,
+            department: matchedCfg.department?.name || (activeDept ? activeDept.name : effectiveDeptName)
+          });
+          if (matchedCfg.serviceCd) serviceCds.push(matchedCfg.serviceCd);
+          displayTestNames.push(testLabel);
+        } else {
+          resolvedTestDetails.push({
+            name: reqName,
+            testName: reqName,
+            status: "Pending Check",
+            intervalTime: 10,
+            intervalTimeVerified: 15,
+            department: activeDept ? activeDept.name : effectiveDeptName
+          });
+          displayTestNames.push(reqName);
+        }
+      }
+    } else {
+      // Barcode scanned without explicit test suffix:
+      // Do NOT set hardcoded "CBC"! Show clean placeholder "Resolving..."
+      // Test details will be populated once the initial check runs.
+      displayTestNames.push("Resolving...");
+    }
+
+    const finalTestName = displayTestNames.join(', ');
+    const finalServiceCd = serviceCds.length > 0 ? serviceCds.join(', ') : `DEPT:${activeDept ? activeDept.name : effectiveDeptName}`;
+
+    // Delayed Check: The trigger timer strictly gates the analyzer polling / background status check.
+    // Trigger target time is calculated from the exact scan time: barcode_scan_time + department_trigger_time.
     const nextCheckTime = new Date(scanTime.getTime() + triggerDelayMins * 60000);
 
     const sample = await prisma.trackedSample.create({
       data: {
-        barcode: barcode,
-        currentStatus: "Pending Check", // Initial pre-check status while trigger timer counts down
-        receivedTime: null,            // Result Entry SLA will start only when status transitions to Received
-        testName: defaultTestName,     // Placeholder "Resolving..." (no hardcoded CBC)
+        barcode: cleanBarcode,
+        currentStatus: "Pending Check",                      // Pre-Check state during trigger delay
+        receivedTime: null,                                  // Result Entry SLA starts ONLY when status transitions to Sample Received
+        resultTime: null,
+        testName: finalTestName,
         patientName: "--",
-        serviceCd: serviceCd,
-        testDetails: JSON.stringify(defaultTestDetails),
-        createdAt: scanTime,          // Exact scan timestamp
-        nextCheckTime: nextCheckTime   // Gated trigger delay for status check
+        serviceCd: finalServiceCd,
+        testDetails: JSON.stringify(resolvedTestDetails),
+        createdAt: scanTime,                                 // Exact scan timestamp
+        nextCheckTime: nextCheckTime                        // Gated trigger delay for status check
       }
     });
 
     await prisma.statusHistory.create({
       data: {
         sampleId: sample.id,
-        status: "Pending Check"
+        status: "Pending Check",
+        timestamp: scanTime
       }
     });
 
@@ -107,37 +164,6 @@ export async function getAllTrackedSamples(dateStr?: string) {
       take: dateStr ? undefined : 1000
     });
 
-    const now = new Date();
-    // Auto-transition samples whose trigger delay has expired from 'Pending Check' to 'Received'
-    const expiredPending = samples.filter(s =>
-      !s.isCompleted &&
-      (s.currentStatus === 'Pending Check' || s.currentStatus === 'Scanned') &&
-      s.nextCheckTime &&
-      new Date(s.nextCheckTime) <= now
-    );
-
-    if (expiredPending.length > 0) {
-      for (const exp of expiredPending) {
-        const transTime = exp.nextCheckTime || now;
-        await prisma.trackedSample.update({
-          where: { id: exp.id },
-          data: {
-            currentStatus: 'Received',
-            receivedTime: transTime
-          }
-        });
-        await prisma.statusHistory.create({
-          data: {
-            sampleId: exp.id,
-            status: 'Received',
-            timestamp: transTime
-          }
-        });
-        exp.currentStatus = 'Received';
-        exp.receivedTime = transTime;
-      }
-    }
-
     const departmentsList = await prisma.department.findMany();
     const deptMap = new Map(departmentsList.map(d => [d.name.toLowerCase(), { name: d.name, triggerTime: d.triggerTime, provisionalTime: d.provisionalTime }]));
 
@@ -171,6 +197,48 @@ export async function getAllTrackedSamples(dateStr?: string) {
         configByName.set(c.shortName.toLowerCase().trim(), info);
       }
     });
+
+    const now = new Date();
+
+    // Check pre-check samples: handle live countdown, checking, and check-failed lifecycle
+    // NEVER inject hardcoded "CBC" or "Sample Collected" dummy data!
+    for (const s of samples) {
+      let normStatus = normalizeStatus(s.currentStatus, s.barcode, s.testName, s.serviceCd);
+      const isPreCheck = (normStatus === 'Pending Check' || normStatus === 'Checking...' || normStatus === 'Check Failed') && !s.receivedTime;
+
+      if (isPreCheck) {
+        const checkTargetMs = s.nextCheckTime ? new Date(s.nextCheckTime).getTime() : 0;
+        const isElapsed = checkTargetMs > 0 && now.getTime() >= checkTargetMs;
+
+        if (isElapsed) {
+          const elapsedSecs = Math.floor((now.getTime() - checkTargetMs) / 1000);
+
+          // If check was explicitly marked failed or has exceeded the 20s extension timeout window:
+          if (normStatus === 'Check Failed' || elapsedSecs >= 20) {
+            normStatus = 'Check Failed';
+            s.currentStatus = 'Check Failed';
+            if (!s.testName || s.testName === 'Resolving...' || s.testName === 'Fetching from LIS...' || s.testName === 'CBC') {
+              s.testName = 'Not Found';
+            }
+          } else {
+            // First 20 seconds after trigger expiry: actively checking against LIS
+            normStatus = 'Checking...';
+            s.currentStatus = 'Checking...';
+            if (!s.testName || s.testName === 'Resolving...' || s.testName === 'CBC') {
+              s.testName = 'Fetching from LIS...';
+            }
+          }
+        } else {
+          normStatus = 'Pending Check';
+          s.currentStatus = 'Pending Check';
+          if (!s.testName || s.testName === 'CBC') {
+            s.testName = 'Resolving...';
+          }
+        }
+      } else {
+        s.currentStatus = normStatus;
+      }
+    }
 
     return samples.map(s => {
       let minTriggerTime = Infinity;
@@ -217,10 +285,13 @@ export async function getAllTrackedSamples(dateStr?: string) {
       });
 
       let displayTestName = s.testName;
+      const isResolvingTest = s.testName === 'Resolving...' || s.testName === 'Pending Check...';
+
+      // Always extract departments and SLA configurations from serviceCd regardless of test resolution state
       if (s.serviceCd) {
         if (s.serviceCd.startsWith('DEPT:')) {
-          const deptName = s.serviceCd.substring(5);
-          if (!departments.includes(deptName)) {
+          const deptName = s.serviceCd.substring(5).trim();
+          if (deptName && !departments.includes(deptName)) {
             departments.push(deptName);
           }
           const deptData = deptMap.get(deptName.toLowerCase());
@@ -228,12 +299,12 @@ export async function getAllTrackedSamples(dateStr?: string) {
           if (deptData?.provisionalTime != null && deptData.provisionalTime < minProvisionalTime) minProvisionalTime = deptData.provisionalTime;
         } else {
           const individualCds = s.serviceCd.split(',').map((cd: string) => cd.trim());
-          const originalTestNames = s.testName.split(',').map((name: string) => name.trim());
+          const originalTestNames = (s.testName || '').split(',').map((name: string) => name.trim());
           
-          displayTestName = individualCds.map((cd: string, index: number) => {
+          const resolvedNames = individualCds.map((cd: string, index: number) => {
             const mapped = configByServiceCd.get(cd.toLowerCase());
             if (mapped) {
-              if (!departments.includes(mapped.department)) {
+              if (mapped.department && !departments.includes(mapped.department)) {
                 departments.push(mapped.department);
               }
               if (mapped.triggerTime != null && mapped.triggerTime < minTriggerTime) minTriggerTime = mapped.triggerTime;
@@ -244,11 +315,19 @@ export async function getAllTrackedSamples(dateStr?: string) {
               return mapped.name;
             }
             return originalTestNames[index] || cd;
-          }).join(', ');
+          });
+
+          if (!isResolvingTest) {
+            displayTestName = resolvedNames.join(', ');
+          }
         }
       }
 
-      if (departments.length === 0 && s.testName) {
+      if (isResolvingTest) {
+        displayTestName = 'Resolving...';
+      }
+
+      if (departments.length === 0 && s.testName && !isResolvingTest) {
         const mappedByName = configByName.get(s.testName.toLowerCase().trim());
         if (mappedByName) {
           if (mappedByName.department && !departments.includes(mappedByName.department)) {
@@ -259,6 +338,11 @@ export async function getAllTrackedSamples(dateStr?: string) {
         }
       }
 
+      // Guarantee tracked samples are always assigned HAEMATOLOGY as primary default if empty
+      if (departments.length === 0) {
+        departments.push('HAEMATOLOGY');
+      }
+
       // Fallback: If minTriggerTime is not set from configs, deduce from nextCheckTime & createdAt
       if (minTriggerTime === Infinity && s.nextCheckTime && s.createdAt) {
         const diffMins = Math.round((new Date(s.nextCheckTime).getTime() - new Date(s.createdAt).getTime()) / 60000);
@@ -266,8 +350,9 @@ export async function getAllTrackedSamples(dateStr?: string) {
           minTriggerTime = diffMins;
         }
       }
-      if (minTriggerTime === Infinity && departments.includes('HAEMATOLOGY')) {
-        minTriggerTime = 2;
+      if (minTriggerTime === Infinity && departments.some(d => d.toLowerCase() === 'haematology')) {
+        const haemDept = deptMap.get('haematology');
+        minTriggerTime = haemDept?.triggerTime ?? 2;
       }
 
       return {
@@ -333,42 +418,133 @@ export async function updateSampleBarcode(id: string, newBarcode: string) {
   }
 }
 
-export async function markSampleReceived(id: string) {
+export async function markSampleReceived(id: string, isResultCompleted: boolean = false) {
   try {
     const existingSample = await prisma.trackedSample.findUnique({ where: { id } });
     if (!existingSample) return { success: false, message: "Sample not found" };
 
-    let intervalTime = 5; // default
-    if (existingSample.serviceCd) {
-      const individualCds = existingSample.serviceCd.split(',').map((cd: string) => cd.trim());
-      const configs = await prisma.testConfig.findMany({
-        where: { serviceCd: { in: individualCds } }
-      });
-      if (configs.length > 0) {
-        intervalTime = Math.min(...configs.map(c => c.intervalTime || 5));
+    const now = new Date();
+
+    // Parse existing testDetails
+    let testDetails: any[] = [];
+    if (existingSample.testDetails) {
+      try {
+        testDetails = JSON.parse(existingSample.testDetails);
+      } catch {
+        testDetails = [];
       }
     }
 
-    const nextCheckTime = new Date(Date.now() + intervalTime * 60000);
+    // Determine configured SLAs
+    let minInterval = 10;
+    let minIntervalVerified: number | null = null;
+    let hasVerification = false;
 
-    const sample = await prisma.trackedSample.update({
-      where: { id },
-      data: { 
-        currentStatus: "Sample Received",
-        receivedTime: new Date(),
-        nextCheckTime: nextCheckTime,
-        expectedEndTime: nextCheckTime
+    if (testDetails.length > 0) {
+      const validIntervals = testDetails.map((t: any) => t.intervalTime).filter((t: any) => typeof t === 'number' && t > 0);
+      if (validIntervals.length > 0) minInterval = Math.min(...validIntervals);
+
+      const validVerifs = testDetails.map((t: any) => t.intervalTimeVerified).filter((v: any) => typeof v === 'number' && v > 0);
+      if (validVerifs.length > 0) {
+        hasVerification = true;
+        minIntervalVerified = Math.min(...validVerifs);
       }
-    });
+    }
 
-    await prisma.statusHistory.create({
-      data: {
-        status: "Sample Received",
-        sampleId: id
+    if (isResultCompleted) {
+      // 1. "Result Completed" is checked by user in modal:
+      // Immediately set the test status to Result Done.
+      // Completely bypass/skip the "Result Done" SLA countdown and checking process.
+      // If the test has a verification SLA configured in Test Config, immediately transition to Phase 3 (Verification Tracking),
+      // calculating the verification deadline starting from this exact completion timestamp.
+      const updatedDetails = testDetails.map((t: any) => ({
+        ...t,
+        status: "Result Done",
+        resultTime: now.toISOString()
+      }));
+
+      let isCompleted = false;
+      let nextCheckTime: Date | null = null;
+      let expectedEndTime: Date | null = null;
+
+      if (hasVerification && minIntervalVerified != null && minIntervalVerified > 0) {
+        // Active Verification SLA Tracking starting from this exact completion timestamp
+        expectedEndTime = new Date(now.getTime() + minIntervalVerified * 60000);
+        nextCheckTime = expectedEndTime;
+        isCompleted = false;
+      } else {
+        // No Verification SLA configured -> workflow terminates at Result Done. Marked Completed!
+        isCompleted = true;
+        nextCheckTime = null;
+        expectedEndTime = now;
       }
-    });
 
-    return { success: true, sample };
+      const sample = await prisma.trackedSample.update({
+        where: { id },
+        data: {
+          currentStatus: "Result Done",
+          receivedTime: now,
+          resultTime: now,
+          isCompleted: isCompleted,
+          nextCheckTime: nextCheckTime,
+          expectedEndTime: expectedEndTime,
+          testDetails: updatedDetails.length > 0 ? JSON.stringify(updatedDetails) : existingSample.testDetails
+        }
+      });
+
+      await prisma.statusHistory.create({
+        data: {
+          sampleId: id,
+          status: "Sample Received",
+          timestamp: now
+        }
+      });
+
+      await prisma.statusHistory.create({
+        data: {
+          sampleId: id,
+          status: "Result Done",
+          timestamp: now
+        }
+      });
+
+      return { success: true, sample };
+    } else {
+      // 2. "Result Completed" is NOT checked:
+      // Transition to Sample Received and begin counting down the Result Done SLA from the received timestamp.
+      const updatedDetails = testDetails.map((t: any) => {
+        const tsLower = (t.status || '').toLowerCase();
+        if (!tsLower.includes('done') && !tsLower.includes('completed') && !tsLower.includes('verified') && !tsLower.includes('approved')) {
+          return { ...t, status: "Sample Received" };
+        }
+        return t;
+      });
+
+      const expectedEndTime = new Date(now.getTime() + minInterval * 60000);
+      const nextCheckTime = expectedEndTime;
+
+      const sample = await prisma.trackedSample.update({
+        where: { id },
+        data: {
+          currentStatus: "Sample Received",
+          receivedTime: now,
+          isCompleted: false,
+          nextCheckTime: nextCheckTime,
+          expectedEndTime: expectedEndTime,
+          testDetails: updatedDetails.length > 0 ? JSON.stringify(updatedDetails) : existingSample.testDetails
+        }
+      });
+
+      await prisma.statusHistory.create({
+        data: {
+          sampleId: id,
+          status: "Sample Received",
+          timestamp: now
+        }
+      });
+
+      return { success: true, sample };
+    }
   } catch (error) {
     console.error("Mark sample received error:", error);
     return { success: false, message: "Database error" };
@@ -415,43 +591,57 @@ export async function extendSampleTime(id: string, testNames: string[], extraTim
   }
 }
 
-export async function simulateFalseTrigger(id: string, type: 'trigger' | 'result' | 'verification') {
+export async function simulateFalseTrigger(id: string, type: 'trigger' | 'result' | 'verification' | 'collected') {
   try {
     const existingSample = await prisma.trackedSample.findUnique({ where: { id } });
     if (!existingSample) return { success: false, message: "Sample not found" };
 
     const updateData: any = {};
+    const now = new Date();
 
-    if (type === 'trigger') {
-      updateData.currentStatus = "Sample Received";
-      updateData.receivedTime = new Date();
+    if (type === 'collected') {
+      const isBatch = isBatchSample(existingSample.barcode, existingSample.testName, existingSample.serviceCd);
+      const newStatus = isBatch ? "Batch Generated" : "Sample Collected";
+      updateData.currentStatus = newStatus;
+      updateData.receivedTime = null;
+      updateData.resultTime = null;
+      updateData.isCompleted = false;
       if (existingSample.testDetails) {
-         try {
-           const details = JSON.parse(existingSample.testDetails);
-           const newDetails = details.map((t: any) => ({ ...t, status: 'Sample Received' }));
-           updateData.testDetails = JSON.stringify(newDetails);
-         } catch(e) {}
+        try {
+          const details = JSON.parse(existingSample.testDetails);
+          const newDetails = details.map((t: any) => ({ ...t, status: newStatus }));
+          updateData.testDetails = JSON.stringify(newDetails);
+        } catch(e) {}
+      }
+    } else if (type === 'trigger') {
+      updateData.currentStatus = "Sample Received";
+      updateData.receivedTime = now;
+      if (existingSample.testDetails) {
+        try {
+          const details = JSON.parse(existingSample.testDetails);
+          const newDetails = details.map((t: any) => ({ ...t, status: 'Sample Received' }));
+          updateData.testDetails = JSON.stringify(newDetails);
+        } catch(e) {}
       }
     } else if (type === 'result') {
       updateData.currentStatus = "Result Done"; 
-      updateData.resultTime = new Date();
+      updateData.resultTime = now;
       if (existingSample.testDetails) {
-         try {
-           const details = JSON.parse(existingSample.testDetails);
-           const newDetails = details.map((t: any) => ({ ...t, status: 'Result Done' }));
-           updateData.testDetails = JSON.stringify(newDetails);
-         } catch(e) {}
+        try {
+          const details = JSON.parse(existingSample.testDetails);
+          const newDetails = details.map((t: any) => ({ ...t, status: 'Result Done', resultTime: now.toISOString() }));
+          updateData.testDetails = JSON.stringify(newDetails);
+        } catch(e) {}
       }
     } else if (type === 'verification') {
       updateData.currentStatus = "Verified";
       updateData.isCompleted = true;
-      
       if (existingSample.testDetails) {
-         try {
-           const details = JSON.parse(existingSample.testDetails);
-           const newDetails = details.map((t: any) => ({ ...t, status: 'Verified' }));
-           updateData.testDetails = JSON.stringify(newDetails);
-         } catch(e) {}
+        try {
+          const details = JSON.parse(existingSample.testDetails);
+          const newDetails = details.map((t: any) => ({ ...t, status: 'Verified' }));
+          updateData.testDetails = JSON.stringify(newDetails);
+        } catch(e) {}
       }
     }
 
@@ -463,7 +653,8 @@ export async function simulateFalseTrigger(id: string, type: 'trigger' | 'result
     await prisma.statusHistory.create({
       data: {
         status: updateData.currentStatus,
-        sampleId: id
+        sampleId: id,
+        timestamp: now
       }
     });
 
@@ -557,6 +748,59 @@ export async function toggleSampleProvisional(id: string, enable?: boolean) {
     }
   } catch (error) {
     console.error("Toggle provisional error:", error);
+    return { success: false, message: "Database error" };
+  }
+}
+
+export async function retrySampleCheck(id: string, barcode?: string) {
+  try {
+    const now = new Date();
+    const updated = await prisma.trackedSample.update({
+      where: { id },
+      data: {
+        currentStatus: "Checking...",
+        testName: "Fetching from LIS...",
+        nextCheckTime: now
+      }
+    });
+
+    await prisma.statusHistory.create({
+      data: {
+        sampleId: id,
+        status: "Checking...",
+        timestamp: now
+      }
+    });
+
+    return { success: true, sample: updated };
+  } catch (error) {
+    console.error("retrySampleCheck error:", error);
+    return { success: false, message: "Database error" };
+  }
+}
+
+export async function triggerBarcodeCheckServer(id: string, barcode?: string) {
+  try {
+    const now = new Date();
+    const updated = await prisma.trackedSample.update({
+      where: { id },
+      data: {
+        currentStatus: "Checking...",
+        testName: "Fetching from LIS..."
+      }
+    });
+
+    await prisma.statusHistory.create({
+      data: {
+        sampleId: id,
+        status: "Checking...",
+        timestamp: now
+      }
+    });
+
+    return { success: true, sample: updated };
+  } catch (error) {
+    console.error("triggerBarcodeCheckServer error:", error);
     return { success: false, message: "Database error" };
   }
 }

@@ -10,12 +10,6 @@ export async function GET() {
     const samples = await prisma.trackedSample.findMany({
       where: {
         isCompleted: false,
-        NOT: {
-          OR: [
-            { currentStatus: { contains: 'collected', mode: 'insensitive' } },
-            { currentStatus: { contains: 'batch generated', mode: 'insensitive' } }
-          ]
-        },
         AND: [
           {
             OR: [
@@ -54,31 +48,15 @@ export async function GET() {
       return true;
     });
 
-    // Move to back of queue and transition from Pending Check -> Received as checking begins
+    // Move to back of queue while background check occurs
     if (validSamples.length > 0) {
       const s = validSamples[0];
-      const isPendingCheck = s.currentStatus === 'Pending Check' || s.currentStatus === 'Scanned';
-      const transTime = s.nextCheckTime || now;
-
       await prisma.trackedSample.update({
         where: { id: s.id },
         data: {
-          ...(isPendingCheck ? { currentStatus: 'Received', receivedTime: transTime } : {}),
           nextCheckTime: new Date(Date.now() + 60000)
         }
       });
-
-      if (isPendingCheck) {
-        await prisma.statusHistory.create({
-          data: {
-            sampleId: s.id,
-            status: 'Received',
-            timestamp: transTime
-          }
-        });
-        s.currentStatus = 'Received';
-        s.receivedTime = transTime;
-      }
     }
 
     const response = NextResponse.json({ success: true, samples: validSamples });

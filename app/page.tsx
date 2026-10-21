@@ -1,12 +1,13 @@
 "use client";
 
 import React, { useState, useRef, useEffect, useMemo, useCallback } from 'react';
-import { saveBarcodeToDatabase, getAllTrackedSamples, clearAllSamples, deleteSample, updateSampleBarcode, markSampleReceived, extendSampleTime, simulateFalseTrigger, toggleSampleProvisional } from './actions';
+import { saveBarcodeToDatabase, getAllTrackedSamples, clearAllSamples, deleteSample, updateSampleBarcode, markSampleReceived, extendSampleTime, simulateFalseTrigger, toggleSampleProvisional, retrySampleCheck, triggerBarcodeCheckServer } from './actions';
 import { getDepartments } from './actions/departments';
 import { DatePicker } from './components/DatePicker';
-import { Edit2, Trash2, Barcode, CheckCircle, Volume2, VolumeX, X as XIcon, ChevronDown, Bell, Search } from 'lucide-react';
+import { Edit2, Trash2, Barcode, CheckCircle, Volume2, VolumeX, X as XIcon, ChevronDown, Bell, Search, RefreshCw } from 'lucide-react';
 import { useSearch } from './context/SearchContext';
 import { formatTimeIST, formatDateIST, getTodayDateIST } from './lib/dateUtils';
+import { normalizeStatus, isBatchSample } from './lib/statusUtils';
 
 interface AlarmTriggers {
   collected: boolean;
@@ -157,10 +158,11 @@ export function getSampleStageInfo(sample: Sample) {
 }
 
 export interface TriggerCountdownState {
-  phase: 'initial_check' | 'result_due' | 'verify_due' | 'completed';
+  phase: 'initial_check' | 'in_progress' | 'check_failed' | 'awaiting_intake' | 'result_due' | 'verify_due' | 'completed';
   label: string;
   formattedTime: string;
   isOverdue: boolean;
+  isBlinking?: boolean;
   bg: string;
   color: string;
   border: string;
@@ -168,70 +170,266 @@ export interface TriggerCountdownState {
 
 export function getTriggerCountdownState(sample: Sample, nowMs: number): TriggerCountdownState {
   const sLower = (sample.status || '').toLowerCase();
+  const tests = Array.isArray(sample.testDetails) ? sample.testDetails : [];
 
-  // 1. Completed State:
-  // Active when test reaches Verified, Approved, Authorized, Dispatch, or isCompleted is true
-  const isVerified = Boolean(
+  // Stage 5: Finished
+  // Check if all tests completed according to their individual rules:
+  // Tests with verification configured require verification; tests without verification terminate at Result Done.
+  const allTestsDoneOrVerified = tests.length > 0 && tests.every((td: any) => {
+    const ds = (td.status || '').toLowerCase();
+    const isApprovedOrVerified = ds.includes('verified') || ds.includes('approved') || ds.includes('authorized') || ds.includes('dispatch');
+    const isDone = isApprovedOrVerified || ds.includes('result done') || ds.includes('done') || ds.includes('completed');
+    if (td.intervalTimeVerified == null || td.intervalTimeVerified <= 0) {
+      return isDone;
+    }
+    return isApprovedOrVerified;
+  });
+
+  const isVerifiedOrDispatched = Boolean(
     sample.isCompleted ||
+    allTestsDoneOrVerified ||
     sLower.includes('verified') ||
     sLower.includes('approved') ||
     sLower.includes('authorized') ||
     sLower.includes('dispatch')
   );
 
-  if (isVerified) {
+  // 1. Stage: Verified / Dispatched (All workflow milestones completed -> Green Completed Badge)
+  if (isVerifiedOrDispatched) {
     return {
       phase: 'completed',
       label: 'Completed',
       formattedTime: '',
       isOverdue: false,
-      bg: 'rgba(16, 185, 129, 0.12)',
+      bg: 'rgba(16, 185, 129, 0.15)',
       color: '#10b981',
-      border: '1px solid rgba(16, 185, 129, 0.3)'
+      border: '1px solid rgba(16, 185, 129, 0.4)'
     };
   }
 
-  // Detect if verification SLA is configured
-  let hasVerificationSla = false;
-  let verifSlaMins = 0;
-  if (sample.intervalTimeVerified != null && sample.intervalTimeVerified > 0) {
-    hasVerificationSla = true;
-    verifSlaMins = sample.intervalTimeVerified;
-  } else if (sample.testDetails && Array.isArray(sample.testDetails)) {
-    const validVerifs = sample.testDetails
-      .map((t: any) => t.intervalTimeVerified)
-      .filter((v: any) => typeof v === 'number' && v > 0);
-    if (validVerifs.length > 0) {
-      hasVerificationSla = true;
-      verifSlaMins = Math.min(...validVerifs);
-    }
-  }
+  // Check intake status:
+  const hasValidReceivedTimestamp = Boolean(
+    (sample.rawReceivedTime && sample.rawReceivedTime !== '--') ||
+    (sample.receivedDate && sample.receivedDate !== '--') ||
+    ((sample as any).receivedTime && (sample as any).receivedTime !== '--')
+  );
 
-  // 2. Result Done Phase:
-  const isResultDone = sLower.includes('result done') || sLower.includes('done') || sLower.includes('completed');
-  if (isResultDone) {
-    if (!hasVerificationSla) {
-      // Reached Result Done status with NO verification time configured -> Completed!
+  const isReceivedStageOrLater = hasValidReceivedTimestamp || 
+    sLower.includes('received') || 
+    sLower.includes('done') || 
+    sLower.includes('verified') || 
+    sLower.includes('approved') || 
+    sLower.includes('dispatch');
+
+  // Pre-Intake Stages (Stage 1 & Stage 2)
+  if (!isReceivedStageOrLater) {
+    const rawScan = sample.rawCreatedAt || (sample as any).createdAt;
+    const scanMs = rawScan ? new Date(rawScan).getTime() : 0;
+    const safeScanMs = isNaN(scanMs) ? 0 : scanMs;
+    const trigMins = sample.triggerTime ?? (sample.departments?.some(d => d.toLowerCase() === 'haematology') ? 2 : 2);
+    let initialCheckTargetMs = (safeScanMs > 0 && trigMins > 0) ? (safeScanMs + trigMins * 60000) : 0;
+    if (initialCheckTargetMs === 0 && sample.nextCheckTime) {
+      const nctMs = new Date(sample.nextCheckTime).getTime();
+      if (!isNaN(nctMs)) initialCheckTargetMs = nctMs;
+    }
+
+    const isPendingCheckStatus = sLower.includes('pending check') || sLower.includes('scanned');
+    const diffSecs = initialCheckTargetMs > 0 ? Math.ceil((initialCheckTargetMs - nowMs) / 1000) : 0;
+
+    // Condition 1: Timer Counting Down (Pending Check with diffSecs > 0)
+    if (isPendingCheckStatus && diffSecs > 0) {
+      const mins = Math.floor(diffSecs / 60);
+      const secs = diffSecs % 60;
       return {
-        phase: 'completed',
-        label: 'Completed',
-        formattedTime: '',
+        phase: 'initial_check',
+        label: 'Initial Check',
+        formattedTime: `${String(mins).padStart(2, '0')}:${String(secs).padStart(2, '0')}`,
         isOverdue: false,
-        bg: 'rgba(16, 185, 129, 0.12)',
-        color: '#10b981',
-        border: '1px solid rgba(16, 185, 129, 0.3)'
+        bg: 'rgba(59, 130, 246, 0.12)',
+        color: 'var(--accent-primary)',
+        border: '1px solid rgba(59, 130, 246, 0.3)'
       };
     }
 
-    // Phase 3: Verification Countdown
-    const resultBaseMs = sample.rawResultTime
-      ? new Date(sample.rawResultTime).getTime()
-      : (sample.rawReceivedTime ? new Date(sample.rawReceivedTime).getTime() : nowMs);
+    // Condition 2: Timer Hits 00:00 (Check Dispatched / In Progress)
+    const isChecking = sLower.includes('checking') || (isPendingCheckStatus && diffSecs <= 0 && diffSecs >= -20);
+    if (isChecking) {
+      return {
+        phase: 'in_progress',
+        label: 'In Progress',
+        formattedTime: 'In Progress',
+        isOverdue: false,
+        isBlinking: false,
+        bg: 'rgba(6, 182, 212, 0.12)',
+        color: '#06b6d4',
+        border: '1px solid rgba(6, 182, 212, 0.35)'
+      };
+    }
 
-    const safeResultBaseMs = isNaN(resultBaseMs) ? nowMs : resultBaseMs;
-    const targetMs = safeResultBaseMs + (verifSlaMins || 15) * 60000;
-    const diffSecs = Math.floor((targetMs - nowMs) / 1000);
+    // Condition 3: Check Times Out / Extension No Response / Failed
+    const isCheckFailed = sLower.includes('check failed') || sLower.includes('failed') || sLower.includes('offline') || (isPendingCheckStatus && diffSecs < -20);
+    if (isCheckFailed) {
+      return {
+        phase: 'check_failed',
+        label: 'Retry Check',
+        formattedTime: '',
+        isOverdue: false,
+        isBlinking: false,
+        bg: 'rgba(100, 116, 139, 0.15)',
+        color: 'var(--text-secondary)',
+        border: '1px solid rgba(100, 116, 139, 0.35)'
+      };
+    }
 
+    // Condition 4: Real Sample Collected / Batch Generated
+    // STRICT GUARD: Must strictly be real Sample Collected or Batch Generated, never incomplete/failed
+    const isCollectedReal = (
+      sLower === 'sample collected' ||
+      sLower === 'batch generated' ||
+      (sLower.includes('collected') && !sLower.includes('uncollected')) ||
+      (sLower.includes('batch') && !sLower.includes('failed'))
+    ) && !sLower.includes('pending') && !sLower.includes('checking') && !sLower.includes('failed');
+
+    if (isCollectedReal) {
+      return {
+        phase: 'awaiting_intake',
+        label: 'Awaiting Intake',
+        formattedTime: '',
+        isOverdue: true,
+        isBlinking: true,
+        bg: 'rgba(239, 68, 68, 0.2)',
+        color: '#ef4444',
+        border: '1px solid rgba(239, 68, 68, 0.5)'
+      };
+    }
+
+    // Default neutral pre-intake fallback
+    return {
+      phase: 'check_failed',
+      label: 'Retry Check',
+      formattedTime: '',
+      isOverdue: false,
+      isBlinking: false,
+      bg: 'rgba(100, 116, 139, 0.15)',
+      color: 'var(--text-secondary)',
+      border: '1px solid rgba(100, 116, 139, 0.35)'
+    };
+  }
+
+  // Calculate base received timestamp for SLA clocks
+  const rawScan = sample.rawCreatedAt || (sample as any).createdAt;
+  const rawReceived = (sample.rawReceivedTime && sample.rawReceivedTime !== '--') 
+    ? sample.rawReceivedTime 
+    : ((sample as any).receivedTime && (sample as any).receivedTime !== '--' ? (sample as any).receivedTime : null);
+  const receivedMs = rawReceived
+    ? new Date(rawReceived).getTime()
+    : (rawScan ? new Date(rawScan).getTime() : nowMs);
+  const safeReceivedMs = isNaN(receivedMs) ? nowMs : receivedMs;
+
+  const isSampleResultDoneOrLater = sLower.includes('result done') || 
+    sLower.includes('verified') || 
+    sLower.includes('approved') || 
+    sLower.includes('dispatch') || 
+    Boolean(sample.isCompleted);
+
+  // Find tests awaiting Result Done
+  const pendingResultTests = tests.filter((td: any) => {
+    const ds = (td.status || '').toLowerCase();
+    const isDone = Boolean(td.isDone) || 
+      ds.includes('result done') || 
+      ds.includes('done') || 
+      ds.includes('completed') || 
+      ds.includes('verified') || 
+      ds.includes('approved') || 
+      ds.includes('dispatch') ||
+      isSampleResultDoneOrLater;
+    return !isDone;
+  });
+
+  const isAwaitingResults = !isSampleResultDoneOrLater && (pendingResultTests.length > 0 || tests.length === 0);
+
+  // 3. Stage: Sample Received (Awaiting test results -> Live countdown to earliest pending Result SLA)
+  if (isAwaitingResults) {
+    let earliestDeadline = Infinity;
+    if (tests.length > 0) {
+      for (const td of pendingResultTests) {
+        const interval = td.intervalTime != null ? td.intervalTime : (sample.intervalTime || 10);
+        const extra = td.extraTime || 0;
+        const testDeadline = safeReceivedMs + (interval + extra) * 60000;
+        if (testDeadline < earliestDeadline) {
+          earliestDeadline = testDeadline;
+        }
+      }
+    } else {
+      const interval = sample.intervalTime || 10;
+      earliestDeadline = safeReceivedMs + interval * 60000;
+    }
+
+    if (earliestDeadline === Infinity) earliestDeadline = safeReceivedMs + 10 * 60000;
+
+    const diffSecs = Math.floor((earliestDeadline - nowMs) / 1000);
+    if (diffSecs >= 0) {
+      const mins = Math.floor(diffSecs / 60);
+      const secs = diffSecs % 60;
+      return {
+        phase: 'result_due',
+        label: 'Result Due',
+        formattedTime: `${String(mins).padStart(2, '0')}:${String(secs).padStart(2, '0')}`,
+        isOverdue: false,
+        bg: 'rgba(245, 158, 11, 0.12)',
+        color: '#f59e0b',
+        border: '1px solid rgba(245, 158, 11, 0.3)'
+      };
+    } else {
+      const overdueSecs = Math.abs(diffSecs);
+      const mins = Math.floor(overdueSecs / 60);
+      const secs = overdueSecs % 60;
+      return {
+        phase: 'result_due',
+        label: 'Result Overdue',
+        formattedTime: `-${String(mins).padStart(2, '0')}:${String(secs).padStart(2, '0')}`,
+        isOverdue: true,
+        bg: 'rgba(239, 68, 68, 0.14)',
+        color: '#ef4444',
+        border: '1px solid rgba(239, 68, 68, 0.4)'
+      };
+    }
+  }
+
+  // All results are done! Stage: Result Done
+  // Check if any test has Verified (Mins) configured and is awaiting verification
+  const pendingVerifTests = tests.filter((td: any) => {
+    const ds = (td.status || '').toLowerCase();
+    const isApprovedOrVerified = Boolean(td.isVerified) || ds.includes('verified') || ds.includes('approved') || ds.includes('authorized') || ds.includes('dispatch');
+    const hasVerif = td.intervalTimeVerified != null && td.intervalTimeVerified > 0;
+    return hasVerif && !isApprovedOrVerified;
+  });
+
+  const hasConfiguredVerif = pendingVerifTests.length > 0 || (
+    tests.length === 0 && sample.intervalTimeVerified != null && sample.intervalTimeVerified > 0 && !sLower.includes('verified')
+  );
+
+  // 4. Stage: Result Done with Verified (Mins) configured -> Live countdown to Verification SLA
+  if (hasConfiguredVerif) {
+    let earliestVerifDeadline = Infinity;
+    if (tests.length > 0) {
+      for (const td of pendingVerifTests) {
+        const testResultMs = td.resultTime ? new Date(td.resultTime).getTime() : (sample.rawResultTime ? new Date(sample.rawResultTime).getTime() : safeReceivedMs);
+        const safeBaseMs = isNaN(testResultMs) ? nowMs : testResultMs;
+        const testVerifDeadline = safeBaseMs + td.intervalTimeVerified * 60000;
+        if (testVerifDeadline < earliestVerifDeadline) {
+          earliestVerifDeadline = testVerifDeadline;
+        }
+      }
+    } else {
+      const resultBaseMs = sample.rawResultTime ? new Date(sample.rawResultTime).getTime() : safeReceivedMs;
+      const safeBaseMs = isNaN(resultBaseMs) ? nowMs : resultBaseMs;
+      earliestVerifDeadline = safeBaseMs + (sample.intervalTimeVerified || 15) * 60000;
+    }
+
+    if (earliestVerifDeadline === Infinity) earliestVerifDeadline = nowMs + 15 * 60000;
+
+    const diffSecs = Math.floor((earliestVerifDeadline - nowMs) / 1000);
     if (diffSecs >= 0) {
       const mins = Math.floor(diffSecs / 60);
       const secs = diffSecs % 60;
@@ -260,93 +458,16 @@ export function getTriggerCountdownState(sample: Sample, nowMs: number): Trigger
     }
   }
 
-  // 3. Phase 1: Initial Check Countdown (Scanned / Pending Check)
-  const isPreCheck = sLower.includes('pending check') || sLower.includes('scanned') || sLower.includes('waiting');
-  const trigMins = sample.triggerTime ?? (sample.departments?.some(d => d.toLowerCase() === 'haematology') ? 2 : 0);
-  const scanMs = sample.rawCreatedAt ? new Date(sample.rawCreatedAt).getTime() : 0;
-  const safeScanMs = isNaN(scanMs) ? 0 : scanMs;
-  const trigTargetMs = (safeScanMs > 0 && trigMins > 0) ? (safeScanMs + trigMins * 60000) : 0;
-  const isTrigActive = trigTargetMs > 0 && nowMs < trigTargetMs;
-
-  if (isPreCheck || isTrigActive) {
-    const targetMs = trigTargetMs > 0 ? trigTargetMs : (nowMs + 120000);
-    const diffSecs = Math.ceil((targetMs - nowMs) / 1000);
-
-    if (diffSecs > 0) {
-      const mins = Math.floor(diffSecs / 60);
-      const secs = diffSecs % 60;
-      return {
-        phase: 'initial_check',
-        label: 'Initial Check',
-        formattedTime: `${String(mins).padStart(2, '0')}:${String(secs).padStart(2, '0')}`,
-        isOverdue: false,
-        bg: 'rgba(59, 130, 246, 0.12)',
-        color: 'var(--accent-primary)',
-        border: '1px solid rgba(59, 130, 246, 0.3)'
-      };
-    } else {
-      return {
-        phase: 'initial_check',
-        label: 'Initial Check',
-        formattedTime: '00:00',
-        isOverdue: false,
-        bg: 'rgba(59, 130, 246, 0.15)',
-        color: 'var(--accent-primary)',
-        border: '1px solid rgba(59, 130, 246, 0.4)'
-      };
-    }
-  }
-
-  // 4. Phase 2: Result Done Countdown (Received status, waiting for results)
-  const receivedMs = sample.rawReceivedTime
-    ? new Date(sample.rawReceivedTime).getTime()
-    : (sample.rawCreatedAt ? new Date(sample.rawCreatedAt).getTime() : nowMs);
-
-  const safeReceivedMs = isNaN(receivedMs) ? nowMs : receivedMs;
-
-  let resultSlaMins = sample.intervalTime || 30;
-  let extraMins = 0;
-  if (sample.testDetails && Array.isArray(sample.testDetails) && sample.testDetails.length > 0) {
-    const validIntervals = sample.testDetails
-      .map((t: any) => t.intervalTime)
-      .filter((v: any) => typeof v === 'number' && v > 0);
-    if (validIntervals.length > 0) resultSlaMins = Math.min(...validIntervals);
-
-    const validExtras = sample.testDetails
-      .map((t: any) => t.extraTime)
-      .filter((v: any) => typeof v === 'number' && v > 0);
-    if (validExtras.length > 0) extraMins = Math.max(0, ...validExtras);
-  }
-
-  const targetMs = safeReceivedMs + (resultSlaMins + extraMins) * 60000;
-  const diffSecs = Math.floor((targetMs - nowMs) / 1000);
-
-  if (diffSecs >= 0) {
-    const mins = Math.floor(diffSecs / 60);
-    const secs = diffSecs % 60;
-    return {
-      phase: 'result_due',
-      label: 'Result Due',
-      formattedTime: `${String(mins).padStart(2, '0')}:${String(secs).padStart(2, '0')}`,
-      isOverdue: false,
-      bg: 'rgba(245, 158, 11, 0.12)',
-      color: '#f59e0b',
-      border: '1px solid rgba(245, 158, 11, 0.3)'
-    };
-  } else {
-    const overdueSecs = Math.abs(diffSecs);
-    const mins = Math.floor(overdueSecs / 60);
-    const secs = overdueSecs % 60;
-    return {
-      phase: 'result_due',
-      label: 'Result Overdue',
-      formattedTime: `-${String(mins).padStart(2, '0')}:${String(secs).padStart(2, '0')}`,
-      isOverdue: true,
-      bg: 'rgba(239, 68, 68, 0.14)',
-      color: '#ef4444',
-      border: '1px solid rgba(239, 68, 68, 0.4)'
-    };
-  }
+  // 5. Stage: Result Done with NO Verified (Mins) configured -> Completed (Green Badge)
+  return {
+    phase: 'completed',
+    label: 'Completed',
+    formattedTime: '',
+    isOverdue: false,
+    bg: 'rgba(16, 185, 129, 0.12)',
+    color: '#10b981',
+    border: '1px solid rgba(16, 185, 129, 0.3)'
+  };
 }
 
 export default function Dashboard() {
@@ -403,7 +524,8 @@ export default function Dashboard() {
   }, []);
 
   const [deleteModal, setDeleteModal] = useState<string | null>(null);
-  const [receiveModal, setReceiveModal] = useState<string | null>(null);
+  const [receiveModal, setReceiveModal] = useState<Sample | null>(null);
+  const [receiveResultCompleted, setReceiveResultCompleted] = useState<boolean>(false);
   const [editModal, setEditModal] = useState<{ id: string, barcode: string } | null>(null);
   const [editInput, setEditInput] = useState('');
   const [departments, setDepartments] = useState<{id: string, name: string, triggerTime?: number | null, provisionalTime?: number | null}[]>([]);
@@ -494,7 +616,13 @@ export default function Dashboard() {
           : 0;
 
         const statusLower = (s.currentStatus || '').toLowerCase();
-        const isPreCheck = statusLower.includes('pending check') || statusLower.includes('scanned') || statusLower.includes('waiting');
+        const isPreCheck = !receivedDateObj && (
+          statusLower.includes('pending check') || 
+          statusLower.includes('scanned') || 
+          statusLower.includes('waiting') || 
+          statusLower.includes('collected') || 
+          statusLower.includes('batch generated')
+        );
 
         // Parse and evaluate individual test SLAs dynamically against persistent timestamps
         const rawTestDetails = s.testDetails ? (() => { try { return JSON.parse(s.testDetails); } catch { return []; } })() : [];
@@ -505,13 +633,15 @@ export default function Dashboard() {
           const isVerified = isApproved || ds.includes('verified');
           const isDone = isVerified || ds.includes('done') || ds.includes('completed');
 
+          // Multi-Test pre-intake check:
+          const isUncollected = ds.includes('collected') || ds.includes('batch generated') || ds.includes('uncollected') || ds.includes('pending collection') || ((statusLower.includes('collected') || statusLower.includes('batch')) && !isDone && !ds.includes('received'));
+
           // 1. Result Entry SLA Tracking:
-          // Starts ONLY from actual sample_received_timestamp when status transitions to RECEIVED.
-          // NEVER starts prematurely during Pending Check / Scanned pre-check window.
+          // Measured from sample_received_time using Test Config -> Result Done (Mins).
           let isResultOverdue = false;
           let isResultOverdueAfterExtraTime = false;
           if (receivedDateObj && !isPreCheck && !isDone) {
-            const resultEntryMins = td.intervalTime != null ? td.intervalTime : (s.intervalTime || 30);
+            const resultEntryMins = td.intervalTime != null ? td.intervalTime : (s.intervalTime || 10);
             const extraMins = td.extraTime || 0;
             const originalDeadline = new Date(receivedDateObj.getTime() + resultEntryMins * 60000);
             const extendedDeadline = new Date(receivedDateObj.getTime() + (resultEntryMins + extraMins) * 60000);
@@ -528,16 +658,26 @@ export default function Dashboard() {
           }
 
           // 2. Verification SLA Tracking:
-          // Calculate verification deadline using result done timestamp + configured verification time
-          // Optional SLA rule: If no verification time is configured for a test, stop all tracking once result is done.
+          // Case 1: No verification time set (Verified (Mins) is null, blank, or 0 in Test Config):
+          // Terminates tracking at Result Done. Mark completed!
+          // Case 2: Verification time is configured:
+          // Calculate: verification_deadline = result_done_time + test_config.verified_mins.
           let isVerificationOverdue = false;
-          if (td.intervalTimeVerified != null && td.intervalTimeVerified > 0) {
-            if (isDone && !isVerified) {
-              const baseTime = resultDateObj || receivedDateObj;
-              if (baseTime) {
-                const verificationDeadline = new Date(baseTime.getTime() + td.intervalTimeVerified * 60000);
-                if (now > verificationDeadline) {
-                  isVerificationOverdue = true;
+          let isTestCompleted = false;
+
+          if (isDone) {
+            if (td.intervalTimeVerified == null || td.intervalTimeVerified <= 0) {
+              isTestCompleted = true;
+            } else {
+              if (isVerified) {
+                isTestCompleted = true;
+              } else {
+                const baseTime = td.resultTime ? new Date(td.resultTime) : (resultDateObj || receivedDateObj);
+                if (baseTime) {
+                  const verificationDeadline = new Date(baseTime.getTime() + td.intervalTimeVerified * 60000);
+                  if (now > verificationDeadline) {
+                    isVerificationOverdue = true;
+                  }
                 }
               }
             }
@@ -550,7 +690,9 @@ export default function Dashboard() {
             isVerificationOverdue,
             isDone,
             isVerified,
-            isApproved
+            isApproved,
+            isTestCompleted,
+            isUncollected
           };
         });
 
@@ -560,7 +702,7 @@ export default function Dashboard() {
 
         let fallbackResultOverdue = false;
         if (testDetails.length === 0 && receivedDateObj && !isPreCheck && !fallbackIsDone) {
-          const limit = new Date(receivedDateObj.getTime() + (s.intervalTime || 30) * 60000);
+          const limit = new Date(receivedDateObj.getTime() + (s.intervalTime || 10) * 60000);
           if (now > limit) fallbackResultOverdue = true;
         }
 
@@ -575,6 +717,9 @@ export default function Dashboard() {
 
         const isResultOverdue = testDetails.some((t: any) => t.isResultOverdue) || fallbackResultOverdue;
         const isVerificationOverdue = testDetails.some((t: any) => t.isVerificationOverdue) || fallbackVerificationOverdue;
+        const isCompleted = testDetails.length > 0 
+          ? testDetails.every((t: any) => t.isTestCompleted)
+          : Boolean(s.isCompleted || fallbackIsVerified || (fallbackIsDone && (s.intervalTimeVerified == null || s.intervalTimeVerified <= 0)));
 
         return {
           id: s.id,
@@ -598,16 +743,16 @@ export default function Dashboard() {
           triggerTarget: triggerTarget ? triggerTarget.toISOString() : null,
           isTriggerPending,
           triggerRemainingSecs,
-          intervalTime: s.intervalTime ?? (testDetails.length > 0 ? Math.min(...testDetails.map((t: any) => t.intervalTime || 30)) : 30),
+          intervalTime: s.intervalTime ?? (testDetails.length > 0 ? Math.min(...testDetails.map((t: any) => t.intervalTime || 10)) : 10),
           intervalTimeVerified: s.intervalTimeVerified !== undefined ? s.intervalTimeVerified : (testDetails.length > 0 && testDetails.some((t: any) => t.intervalTimeVerified != null) ? Math.min(...testDetails.filter((t: any) => t.intervalTimeVerified != null).map((t: any) => t.intervalTimeVerified)) : null),
           target: '--',
           delayPercent: 0,
-          departments: s.departments || [],
-          isOverdue: !s.isCompleted && (
-            (s.expectedEndTime && new Date() > new Date(s.expectedEndTime)) || 
-            (!s.expectedEndTime && s.receivedTime && new Date().getTime() - new Date(s.receivedTime).getTime() > 15 * 60000)
+          departments: (s.departments && s.departments.length > 0) ? s.departments : ['HAEMATOLOGY'],
+          isOverdue: !isCompleted && (
+            isResultOverdue || isVerificationOverdue ||
+            (s.expectedEndTime && new Date() > new Date(s.expectedEndTime))
           ),
-          isOverdueAfterExtraTime: !s.isCompleted && (
+          isOverdueAfterExtraTime: !isCompleted && (
             (s.expectedEndTime && new Date() > new Date(s.expectedEndTime)) || 
             (!s.expectedEndTime && s.receivedTime && new Date().getTime() - new Date(s.receivedTime).getTime() > 15 * 60000)
           ) && (testDetails.length > 0 ? testDetails.some((t: any) => t.extraTime && t.extraTime > 0) : false),
@@ -617,21 +762,166 @@ export default function Dashboard() {
           isProvisional: Boolean(s.isProvisional),
           provisionalTime: s.provisionalTime,
           provisionalExpiry: s.provisionalExpiry,
-          isCompleted: Boolean(s.isCompleted),
+          isCompleted: isCompleted,
         };
       });
-      setSamples(formattedSamples);
+      setSamples(prev => {
+        // Prevent table reset flicker: preserve any in-flight optimistic samples not yet in formattedSamples
+        const pendingOptimistic = prev.filter(p => 
+          p.id.startsWith('temp-') && !formattedSamples.some(f => f.barcode === p.barcode)
+        );
+        if (pendingOptimistic.length === 0) {
+          return formattedSamples;
+        }
+        return [...pendingOptimistic, ...formattedSamples];
+      });
     } catch (error) {
       console.warn("Polling error (Server might be restarting):", error);
     }
   }, [selectedDate]);
 
   // 1-second live ticker to keep countdowns and timers updating live on screen
-  const [, setLiveTick] = useState(0);
-  useEffect(() => {
-    const timer = setInterval(() => setLiveTick(t => t + 1), 1000);
-    return () => clearInterval(timer);
+  const [liveTick, setLiveTick] = useState(0);
+  const dispatchedBarcodesRef = useRef<Set<string>>(new Set());
+
+  // Communication Bridge: Dispatch lookup to browser extension / background worker
+  const dispatchExtensionLookup = useCallback((barcode: string, departmentId?: string, departmentTriggerTime?: number) => {
+    // Diagnostic log specified in requirements:
+    console.log(`[Dashboard] Trigger timer expired for barcode: ${barcode}. Sending lookup request...`);
+
+    const payload = {
+      barcode,
+      departmentId: departmentId || 'HAEMATOLOGY',
+      departmentTriggerTime: departmentTriggerTime ?? 2,
+      timestamp: new Date().toISOString()
+    };
+
+    if (typeof window !== 'undefined') {
+      // 1. Post message to window (content.js listening)
+      window.postMessage({
+        type: 'LIS_TAT_TRIGGER_CHECK',
+        action: 'SEARCH_BARCODE',
+        ...payload
+      }, '*');
+
+      // 2. Dispatch custom DOM event
+      window.dispatchEvent(new CustomEvent('LIS_TAT_TRIGGER_CHECK', { detail: payload }));
+
+      // 3. Direct chrome runtime if injected in same context
+      try {
+        const winAny = window as any;
+        if (typeof winAny.chrome !== 'undefined' && winAny.chrome?.runtime?.sendMessage) {
+          winAny.chrome.runtime.sendMessage({
+            action: 'SEARCH_BARCODE',
+            ...payload
+          }, () => {
+            if (winAny.chrome.runtime.lastError) { /* ignore */ }
+          });
+        }
+      } catch (e) {
+        // Ignore
+      }
+    }
   }, []);
+
+  // Check timers every second: when remainingTime <= 0 on a pre-check barcode, dispatch lookup immediately
+  useEffect(() => {
+    const timer = setInterval(() => {
+      setLiveTick(t => t + 1);
+
+      const nowMs = Date.now();
+      samples.forEach(sample => {
+        const sLower = (sample.status || '').toLowerCase();
+        const isPreCheck = sLower.includes('pending check') || sLower.includes('scanned');
+
+        if (isPreCheck && (!sample.receivedDate || sample.receivedDate === '--')) {
+          // Calculate remaining time
+          const rawScan = sample.rawCreatedAt || (sample as any).createdAt;
+          const scanMs = rawScan ? new Date(rawScan).getTime() : 0;
+          const safeScanMs = isNaN(scanMs) ? 0 : scanMs;
+          const trigMins = sample.triggerTime ?? (sample.departments?.some(d => d.toLowerCase() === 'haematology') ? 2 : 2);
+          let targetMs = (safeScanMs > 0 && trigMins > 0) ? (safeScanMs + trigMins * 60000) : 0;
+          if (targetMs === 0 && sample.nextCheckTime) {
+            const nctMs = new Date(sample.nextCheckTime).getTime();
+            if (!isNaN(nctMs)) targetMs = nctMs;
+          }
+
+          const diffSecs = targetMs > 0 ? Math.ceil((targetMs - nowMs) / 1000) : 0;
+
+          // When remainingTime <= 0, actively dispatch trigger event to extension
+          if (diffSecs <= 0 && !dispatchedBarcodesRef.current.has(sample.barcode)) {
+            dispatchedBarcodesRef.current.add(sample.barcode);
+
+            // Update sample in local state to Checking... with Fetching from LIS...
+            setSamples(prev => prev.map(s => {
+              if (s.barcode === sample.barcode) {
+                return {
+                  ...s,
+                  status: 'Checking...',
+                  test: (!s.test || s.test === 'Resolving...' || s.test === 'Waiting...') ? 'Fetching from LIS...' : s.test
+                };
+              }
+              return s;
+            }));
+
+            // Actively dispatch lookup
+            dispatchExtensionLookup(sample.barcode, sample.departments?.[0], sample.triggerTime ?? undefined);
+
+            // Update status on server
+            triggerBarcodeCheckServer(sample.id, sample.barcode).catch(() => {});
+          }
+        }
+      });
+    }, 1000);
+
+    return () => clearInterval(timer);
+  }, [samples, dispatchExtensionLookup]);
+
+  // Retry check handler for [Retry Check] button
+  const handleRetryCheck = useCallback(async (sample: Sample) => {
+    dispatchedBarcodesRef.current.delete(sample.barcode);
+
+    // Update locally to Checking... immediately
+    setSamples(prev => prev.map(s => {
+      if (s.barcode === sample.barcode || s.id === sample.id) {
+        return {
+          ...s,
+          status: 'Checking...',
+          test: 'Fetching from LIS...'
+        };
+      }
+      return s;
+    }));
+
+    // Dispatch lookup
+    dispatchExtensionLookup(sample.barcode, sample.departments?.[0], sample.triggerTime ?? undefined);
+
+    // Server action
+    await retrySampleCheck(sample.id, sample.barcode);
+
+    // Re-fetch shortly after
+    setTimeout(() => loadRealData(), 1500);
+  }, [dispatchExtensionLookup, loadRealData]);
+
+  // Listen for extension status updates relayed to the window
+  useEffect(() => {
+    const handleUpdate = () => {
+      loadRealData();
+    };
+
+    window.addEventListener('LIS_STATUS_UPDATED', handleUpdate);
+    const messageHandler = (e: MessageEvent) => {
+      if (e.data && e.data.type === 'LIS_STATUS_UPDATED') {
+        loadRealData();
+      }
+    };
+    window.addEventListener('message', messageHandler);
+
+    return () => {
+      window.removeEventListener('LIS_STATUS_UPDATED', handleUpdate);
+      window.removeEventListener('message', messageHandler);
+    };
+  }, [loadRealData]);
 
   useEffect(() => {
     // Initial load
@@ -672,22 +962,43 @@ export default function Dashboard() {
       delayMins = 2;
     }
 
-    const defaultTestName = "Resolving...";
-    const defaultTestDetails = [{
-      name: defaultTestName,
-      status: "Pending Check",
-      intervalTime: 10,
-      intervalTimeVerified: 15,
-      department: effectiveDept
-    }];
+    let cleanBarcode = currentInput;
+    let requestedTests: string[] = [];
+    if (cleanBarcode.includes(':')) {
+      const parts = cleanBarcode.split(':');
+      cleanBarcode = parts[0].trim();
+      const testsPart = parts.slice(1).join(':').trim();
+      if (testsPart) {
+        requestedTests = testsPart.split(',').map(t => t.trim()).filter(Boolean);
+      }
+    }
 
-    // Step 1: Immediate row creation on dashboard in Pending Check status
+    let defaultTestDetails: any[] = [];
+    if (requestedTests.length > 0) {
+      defaultTestDetails = requestedTests.map(t => ({
+        name: t,
+        status: "Pending Check",
+        intervalTime: 10,
+        intervalTimeVerified: 15,
+        department: effectiveDept,
+        isUncollected: false
+      }));
+    } else {
+      // Do NOT set hardcoded "CBC"! Show clean placeholder "Resolving..."
+      defaultTestDetails = [];
+    }
+
+    const defaultTestName = defaultTestDetails.length > 0 
+      ? defaultTestDetails.map(t => t.name).join(', ') 
+      : "Resolving...";
+
+    // Immediately create the row with actual order details in Stage 1 pre-check status
     const optimisticSample: Sample = {
-      id: `temp-${Date.now()}`,
-      barcode: currentInput,
+      id: `temp-${cleanBarcode}-${Date.now()}`,
+      barcode: cleanBarcode,
       patient: "--",
       test: defaultTestName,
-      serviceCd: `DEPT:${effectiveDept}`,
+      serviceCd: requestedTests.length > 0 ? requestedTests.join(', ') : `DEPT:${effectiveDept}`,
       status: "Pending Check",
       entryDate: formatDateIST(now),
       entryTime: formatTimeIST(now),
@@ -700,6 +1011,7 @@ export default function Dashboard() {
       rawResultTime: null,
       triggerTime: delayMins,
       triggerTarget: delayMins > 0 ? new Date(now.getTime() + delayMins * 60000).toISOString() : null,
+      nextCheckTime: delayMins > 0 ? new Date(now.getTime() + delayMins * 60000).toISOString() : null,
       isTriggerPending: delayMins > 0,
       triggerRemainingSecs: delayMins * 60,
       intervalTime: 10,
@@ -717,20 +1029,30 @@ export default function Dashboard() {
       isCompleted: false,
     };
 
-    setSamples(prev => [optimisticSample, ...prev.filter(s => s.barcode !== currentInput)]);
+    setSamples(prev => [optimisticSample, ...prev.filter(s => s.barcode !== cleanBarcode)]);
 
     try {
-      const res = await fetch('/api/save-barcode', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ barcode: currentInput, activeTab: effectiveDept })
-      });
-      const response = await res.json();
+      const response = await saveBarcodeToDatabase(currentInput, effectiveDept);
       
-      if (response.success) {
+      if (response.success && response.sample) {
         const triggerDelay = response.triggerDelayMins ?? delayMins;
-        setScanNotice({ barcode: currentInput, delayMins: triggerDelay });
+        setScanNotice({ barcode: cleanBarcode, delayMins: triggerDelay });
         setTimeout(() => setScanNotice(null), 5000);
+
+        // Seamless in-place reconciliation: update optimistic row with real DB data
+        setSamples(prev => prev.map(s => {
+          if (s.barcode === cleanBarcode || s.id === optimisticSample.id) {
+            return {
+              ...s,
+              id: response.sample!.id,
+              rawCreatedAt: response.sample!.createdAt ? new Date(response.sample!.createdAt).toISOString() : s.rawCreatedAt,
+              nextCheckTime: response.sample!.nextCheckTime ? new Date(response.sample!.nextCheckTime).toISOString() : s.nextCheckTime,
+              departments: (s.departments && s.departments.length > 0) ? s.departments : [effectiveDept]
+            };
+          }
+          return s;
+        }));
+
         await loadRealData();
       } else {
         alert(response.message || "Failed to save barcode.");
@@ -825,7 +1147,14 @@ export default function Dashboard() {
       if (!hasDeptAccess || mutedSamples.has(s.id) || s.isProvisional) return false;
 
       const sLower = s.status.toLowerCase();
-      const isCollected = sLower.includes('collected') || sLower.includes('batch generated');
+      // STRICT GUARD: Only activate collected alarm if strictly confirmed Sample Collected or Batch Generated!
+      // Incomplete check, Checking..., Check Failed, or missing response must NEVER trigger alarm!
+      const isCollected = (
+        sLower === 'sample collected' || 
+        sLower === 'batch generated' || 
+        (sLower.includes('collected') && !sLower.includes('uncollected')) || 
+        (sLower.includes('batch') && !sLower.includes('failed'))
+      ) && !sLower.includes('pending') && !sLower.includes('checking') && !sLower.includes('failed') && !sLower.includes('received');
 
       return (
         (alarmTriggers.collected && isCollected) ||
@@ -887,43 +1216,23 @@ export default function Dashboard() {
 
   const confirmMarkReceived = async () => {
     if (!receiveModal) return;
-    const id = receiveModal;
-    const res = await markSampleReceived(id);
+    const targetId = receiveModal.id;
+    const isCompleted = receiveResultCompleted;
+    setReceiveModal(null);
+    const res = await markSampleReceived(targetId, isCompleted);
     if (res.success && res.sample) {
-      setSamples(prev => prev.map(s => s.id === id ? { 
-        ...s, 
-        status: res.sample.currentStatus, 
-        receivedDate: formatDateIST(res.sample.receivedTime),
-        receivedTime: formatTimeIST(res.sample.receivedTime)
-      } : s));
+      await loadRealData();
     } else {
       alert(res.message || "Failed to mark as received.");
+      await loadRealData();
     }
-    setReceiveModal(null);
     setTimeout(() => inputRef.current?.focus(), 10);
   };
 
-  const handleFalseTrigger = async (id: string, type: 'trigger' | 'result' | 'verification') => {
+  const handleFalseTrigger = async (id: string, type: 'trigger' | 'result' | 'verification' | 'collected') => {
     const res = await simulateFalseTrigger(id, type);
     if (res.success && res.sample) {
-      setSamples(prev => prev.map(s => {
-        if (s.id === id) {
-          const testDetails = s.testDetails ? [...s.testDetails] : [];
-          if (type === 'verification' && testDetails.length > 0) {
-            testDetails.forEach(td => td.status = 'Verified');
-          }
-          return { 
-            ...s, 
-            status: res.sample.currentStatus, 
-            receivedDate: res.sample.receivedTime ? formatDateIST(res.sample.receivedTime) : s.receivedDate,
-            receivedTime: res.sample.receivedTime ? formatTimeIST(res.sample.receivedTime) : s.receivedTime,
-            resultDate: res.sample.resultTime ? formatDateIST(res.sample.resultTime) : s.resultDate,
-            resultTime: res.sample.resultTime ? formatTimeIST(res.sample.resultTime) : s.resultTime,
-            testDetails: type === 'verification' ? testDetails : s.testDetails
-          };
-        }
-        return s;
-      }));
+      await loadRealData();
     } else {
       alert(res.message || "Failed to trigger.");
     }
@@ -952,27 +1261,56 @@ export default function Dashboard() {
   };
 
   const getStatusClass = (status: string) => {
-    const s = status.toLowerCase();
+    const s = (status || '').toLowerCase();
+    if (s.includes('checking')) return 'checking';
+    if (s.includes('check failed') || s.includes('failed') || s.includes('offline') || s.includes('not found')) return 'check-failed';
     if (s.includes('scanned') || s.includes('pending check') || s.includes('waiting')) return 'pending-check';
+    if (s.includes('batch')) return 'batch';
+    if (s.includes('collected')) return 'collected';
     if (s.includes('received')) return 'received';
     if (s.includes('pending')) return 'pending';
     if (s.includes('completed') || s.includes('done') || s.includes('verified') || s.includes('approved')) return 'completed';
-    if (s.includes('collected') || s.includes('batch generated')) return 'collected';
     return 'default';
   };
 
   const getCardStatusClass = (sample: Sample) => {
     if (sample.isProvisional) return 'status-provisional';
     const s = sample.status.toLowerCase();
-    
-    if (sample.isTriggerOverdue) return 'status-overdue';
 
-    if (s.includes('pending')) return 'status-pending';
-    if (s.includes('completed') || s.includes('done') || s.includes('verified') || s.includes('approved') || s.includes('dispatch')) return 'status-completed';
-    if (s.includes('waiting')) return 'status-waiting';
+    // 1. Pre-check during delay: neutral info, NO danger alert
+    if (s.includes('pending check') || s.includes('scanned')) {
+      return 'status-pending-check';
+    }
+
+    // 2. Checking in progress: neutral cyan, NO danger alert
+    if (s.includes('checking')) {
+      return 'status-checking';
+    }
+
+    // 3. Check failed / extension offline: warning gray, NO danger alert
+    if (s.includes('check failed') || s.includes('failed') || s.includes('offline')) {
+      return 'status-check-failed';
+    }
+
+    // 4. Critical Pre-Intake state: ONLY if strictly confirmed Sample Collected or Batch Generated!
+    // NEVER apply danger highlight unless valid API/extension response explicitly returns Sample Collected or Batch Generated!
+    const isCollectedAlert = (
+      s === 'sample collected' || 
+      s === 'batch generated' || 
+      (s.includes('collected') && !s.includes('uncollected')) || 
+      (s.includes('batch') && !s.includes('failed'))
+    ) && !s.includes('pending') && !s.includes('checking') && !s.includes('failed') && !s.includes('received');
+
+    if (isCollectedAlert) return 'status-collected';
+
     if (sample.isOverdueAfterExtraTime) return 'status-overdue-critical';
+    if (sample.isResultOverdue) return 'status-result-overdue';
+    if (sample.isVerificationOverdue) return 'status-verification-overdue';
+    if (sample.isTriggerOverdue) return 'status-overdue';
     if (sample.isOverdue) return 'status-overdue';
-    if (s.includes('collected') || s.includes('batch generated')) return 'status-collected';
+    if (sample.isCompleted || s.includes('completed') || s.includes('verified') || s.includes('approved') || s.includes('dispatch')) return 'status-completed';
+    if (s.includes('pending')) return 'status-pending';
+    if (s.includes('waiting')) return 'status-waiting';
     return '';
   };
 
@@ -984,13 +1322,20 @@ export default function Dashboard() {
     const endObj = new Date(year, month - 1, day);
     endObj.setHours(23, 59, 59, 999);
 
-    const checkMatch = (dateStr: string) => {
+    const checkMatch = (dateStr?: string | null) => {
       if (!dateStr || dateStr === '--') return false;
       const d = new Date(dateStr);
       if (isNaN(d.getTime())) return false;
       d.setHours(12, 0, 0, 0);
       return d >= startObj && d <= endObj;
     };
+
+    if (sample.rawCreatedAt) {
+      const d = new Date(sample.rawCreatedAt);
+      if (!isNaN(d.getTime())) {
+        if (d >= startObj && d <= endObj) return true;
+      }
+    }
 
     return checkMatch(sample.receivedDate) || checkMatch(sample.resultDate) || checkMatch(sample.entryDate);
   }, [selectedDate]);
@@ -999,14 +1344,17 @@ export default function Dashboard() {
   const userAccessibleSamples = useMemo(() => {
     return samples.filter(sample => {
       if (user?.username === 'admin') return true;
-      return sample.departments && sample.departments.some(dName => departments.some(dept => dept.name === dName));
+      if (!sample.departments || sample.departments.length === 0) return true;
+      return sample.departments.some(dName => departments.some(dept => dept.name.toLowerCase() === dName.toLowerCase()));
     });
   }, [samples, user, departments]);
 
   // Base samples for the selected department tab matching date
   const selectedDeptSamples = useMemo(() => {
     return userAccessibleSamples.filter(sample => {
-      const matchesDept = activeTab ? (sample.departments && sample.departments.includes(activeTab)) : true;
+      const matchesDept = activeTab 
+        ? (!sample.departments || sample.departments.length === 0 || sample.departments.some(d => d.toLowerCase() === activeTab.toLowerCase())) 
+        : true;
       return matchesDept && sampleMatchesDate(sample);
     });
   }, [userAccessibleSamples, activeTab, sampleMatchesDate]);
@@ -1053,7 +1401,7 @@ export default function Dashboard() {
   // Count for each department tab for current date
   const getDeptSampleCount = (deptName: string) => {
     return userAccessibleSamples.filter(s => 
-      s.departments && s.departments.includes(deptName) && sampleMatchesDate(s)
+      s.departments && s.departments.some(d => d.toLowerCase() === deptName.toLowerCase()) && sampleMatchesDate(s)
     ).length;
   };
 
@@ -1070,7 +1418,9 @@ export default function Dashboard() {
 
     let matchesDepartment = true;
     if (activeTab) {
-      matchesDepartment = sample.departments ? sample.departments.includes(activeTab) : false;
+      matchesDepartment = (!sample.departments || sample.departments.length === 0)
+        ? true
+        : sample.departments.some(d => d.toLowerCase() === activeTab.toLowerCase());
     }
 
     // Override date filter if they are explicitly searching for something
@@ -1520,7 +1870,7 @@ export default function Dashboard() {
               </thead>
               <tbody>
                 {filteredSamples.map((sample, index) => (
-                  <tr key={sample.id} className={`table-row ${getCardStatusClass(sample)}`}>
+                  <tr key={sample.barcode || sample.id} className={`table-row ${getCardStatusClass(sample)}`}>
                     <td className="text-secondary" style={{ textAlign: 'center', fontSize: '9.5px' }}>
                       {filteredSamples.length - index}
                     </td>
@@ -1541,6 +1891,9 @@ export default function Dashboard() {
                             const isExtraOverdue = Boolean(td.isResultOverdueAfterExtraTime && !isDone);
                             const isResultOverdue = Boolean(td.isResultOverdue && !isDone);
 
+                            const isRowDanger = sample.status.toLowerCase().includes('collected') || sample.status.toLowerCase().includes('batch generated') || (sample.testDetails && sample.testDetails.some((d: any) => d.isUncollected));
+                            const isTestUncollected = Boolean((td.isUncollected || isRowDanger) && !isDone && !isVerified);
+
                             let bg = 'rgba(255, 255, 255, 0.05)';
                             let anim = 'none';
                             let border = '1px solid var(--border-color)';
@@ -1548,30 +1901,44 @@ export default function Dashboard() {
 
                             if (isVerificationOverdue) {
                               anim = 'blinkPurple 1.5s infinite ease-in-out';
-                              bg = 'rgba(139, 92, 246, 0.22)';
-                              border = '1px solid rgba(139, 92, 246, 0.6)';
-                              color = '#a78bfa';
+                              bg = 'rgba(139, 92, 246, 0.25)';
+                              border = '1px solid #a855f7';
+                              color = '#c084fc';
                             } else if (isExtraOverdue) {
                               anim = 'blinkRed 1s infinite ease-in-out';
-                              bg = 'rgba(239, 68, 68, 0.22)';
-                              border = '1px solid rgba(239, 68, 68, 0.6)';
+                              bg = 'rgba(239, 68, 68, 0.25)';
+                              border = '1px solid #ef4444';
                               color = '#ef4444';
                             } else if (isResultOverdue) {
                               anim = 'blinkAlert 1.5s infinite ease-in-out';
-                              bg = 'rgba(245, 158, 11, 0.22)';
-                              border = '1px solid rgba(245, 158, 11, 0.6)';
-                              color = '#f59e0b';
+                              bg = 'rgba(239, 68, 68, 0.25)';
+                              border = '1px solid #ef4444';
+                              color = '#ef4444';
+                            } else if (isRowDanger && isTestUncollected) {
+                              // Critical pre-intake state: highlight specifically each uncollected test badge
+                              anim = 'blinkRedAlert 2s infinite ease-in-out';
+                              bg = 'rgba(239, 68, 68, 0.28)';
+                              border = '1px solid #ef4444';
+                              color = '#fca5a5';
                             } else if (isDone) {
-                              // Reached Result Done within allowed time (and verification not overdue or not required)
+                              // Reached Result Done within allowed time
                               anim = 'none';
                               bg = 'rgba(16, 185, 129, 0.12)';
                               border = '1px solid rgba(16, 185, 129, 0.28)';
                               color = 'var(--success)';
+                            } else {
+                              // Normal styling for already collected/received test
+                              anim = 'none';
+                              bg = 'rgba(255, 255, 255, 0.05)';
+                              border = '1px solid var(--border-color)';
+                              color = 'var(--text-primary)';
                             }
 
                             const canExtend = isResultOverdue || isExtraOverdue || isVerificationOverdue;
 
                             const isResolving = td.name === 'Resolving...' || td.name === 'Fetching Test...';
+                            const isFetching = td.name === 'Fetching from LIS...';
+                            const isNotFound = td.name === 'Not Found';
                             if (isResolving) {
                               return (
                                 <span 
@@ -1589,6 +1956,45 @@ export default function Dashboard() {
                                 >
                                   <span>⏳</span>
                                   <span>Resolving...</span>
+                                </span>
+                              );
+                            }
+                            if (isFetching) {
+                              return (
+                                <span 
+                                  key={i}
+                                  style={{
+                                    fontStyle: 'italic',
+                                    color: '#06b6d4',
+                                    display: 'inline-flex',
+                                    alignItems: 'center',
+                                    gap: '3px',
+                                    fontSize: '9px',
+                                    fontWeight: 500
+                                  }}
+                                  title="Actively retrieving test details from LIS"
+                                >
+                                  <span style={{ display: 'inline-block', width: '7px', height: '7px', border: '1.5px solid #06b6d4', borderTopColor: 'transparent', borderRadius: '50%', animation: 'spin 1s linear infinite' }}></span>
+                                  <span>Fetching from LIS...</span>
+                                </span>
+                              );
+                            }
+                            if (isNotFound) {
+                              return (
+                                <span 
+                                  key={i}
+                                  style={{
+                                    color: 'var(--text-secondary)',
+                                    display: 'inline-flex',
+                                    alignItems: 'center',
+                                    gap: '3px',
+                                    fontSize: '9px',
+                                    opacity: 0.85
+                                  }}
+                                  title="Test not found in LIS"
+                                >
+                                  <span>⚠️</span>
+                                  <span>Not Found</span>
                                 </span>
                               );
                             }
@@ -1647,6 +2053,11 @@ export default function Dashboard() {
                             fallbackBg = 'rgba(245, 158, 11, 0.22)';
                             fallbackBorder = '1px solid rgba(245, 158, 11, 0.6)';
                             fallbackColor = '#f59e0b';
+                          } else if ((statusLower.includes('collected') || statusLower.includes('batch')) && !fallbackIsDone) {
+                            fallbackAnim = 'blinkRedAlert 2s infinite ease-in-out';
+                            fallbackBg = 'rgba(239, 68, 68, 0.28)';
+                            fallbackBorder = '1px solid #ef4444';
+                            fallbackColor = '#fca5a5';
                           } else if (fallbackIsDone) {
                             fallbackBg = 'rgba(16, 185, 129, 0.12)';
                             fallbackBorder = '1px solid rgba(16, 185, 129, 0.28)';
@@ -1681,6 +2092,16 @@ export default function Dashboard() {
                                 <span style={{ fontStyle: 'italic', color: 'var(--text-secondary)', display: 'inline-flex', alignItems: 'center', gap: '3px', opacity: 0.85 }}>
                                   <span>⏳</span>
                                   <span>Resolving...</span>
+                                </span>
+                              ) : sample.test === 'Fetching from LIS...' ? (
+                                <span style={{ fontStyle: 'italic', color: '#06b6d4', display: 'inline-flex', alignItems: 'center', gap: '3px', fontWeight: 500 }}>
+                                  <span style={{ display: 'inline-block', width: '7px', height: '7px', border: '1.5px solid #06b6d4', borderTopColor: 'transparent', borderRadius: '50%', animation: 'spin 1s linear infinite' }}></span>
+                                  <span>Fetching from LIS...</span>
+                                </span>
+                              ) : sample.test === 'Not Found' ? (
+                                <span style={{ color: 'var(--text-secondary)', display: 'inline-flex', alignItems: 'center', gap: '3px', opacity: 0.85 }}>
+                                  <span>⚠️</span>
+                                  <span>Not Found</span>
                                 </span>
                               ) : (
                                 sample.test
@@ -1717,7 +2138,7 @@ export default function Dashboard() {
                     <td>
                       <div style={{ display: 'flex', flexDirection: 'column', gap: '2px', alignItems: 'flex-start' }}>
                         <span className={`status-badge ${getStatusClass(sample.status)}`}>
-                          {sample.status}
+                          {normalizeStatus(sample.status, sample.barcode, sample.test)}
                         </span>
                         {sample.isProvisional && (
                           <span 
@@ -1758,21 +2179,34 @@ export default function Dashboard() {
                         >
                           {mutedSamples.has(sample.id) ? <VolumeX size={11} /> : <Volume2 size={11} />}
                         </button>
-                        <button 
-                          onClick={() => setReceiveModal(sample.id)}
-                          disabled={!(sample.status.toLowerCase().includes('collected') || sample.status.toLowerCase().includes('batch generated'))}
-                          style={{ 
-                            background: 'transparent', 
-                            border: 'none', 
-                            color: 'var(--success)', 
-                            cursor: (sample.status.toLowerCase().includes('collected') || sample.status.toLowerCase().includes('batch generated')) ? 'pointer' : 'default', 
-                            padding: '1px',
-                            opacity: (sample.status.toLowerCase().includes('collected') || sample.status.toLowerCase().includes('batch generated')) ? 1 : 0.2
-                          }}
-                          title="Mark as Received"
-                        >
-                          <CheckCircle size={11} />
-                        </button>
+                        {(() => {
+                          const s = sample.status.toLowerCase();
+                          const isAlreadyReceived = s.includes('received') || s.includes('result done') || s.includes('done') || s.includes('verified') || s.includes('approved') || s.includes('dispatch') || sample.isCompleted;
+                          const isEligibleForReceive = !isAlreadyReceived || s.includes('collected') || s.includes('batch generated') || s.includes('pending check') || s.includes('scanned') || sample.receivedDate === '--';
+
+                          return (
+                            <button 
+                              onClick={() => {
+                                if (isEligibleForReceive) {
+                                  setReceiveModal(sample);
+                                  setReceiveResultCompleted(false);
+                                }
+                              }}
+                              disabled={!isEligibleForReceive}
+                              style={{ 
+                                background: 'transparent', 
+                                border: 'none', 
+                                color: isEligibleForReceive ? 'var(--success)' : 'var(--text-secondary)', 
+                                cursor: isEligibleForReceive ? 'pointer' : 'default', 
+                                padding: '1px',
+                                opacity: isEligibleForReceive ? 1 : 0.2
+                              }}
+                              title={isEligibleForReceive ? "Mark Sample as Received in Lab" : "Already Received"}
+                            >
+                              <CheckCircle size={11} />
+                            </button>
+                          );
+                        })()}
                         <button 
                           onClick={() => handleEdit(sample.id, sample.barcode)}
                           style={{ background: 'transparent', border: 'none', color: 'var(--accent-primary)', cursor: 'pointer', padding: '1px' }}
@@ -1806,7 +2240,8 @@ export default function Dashboard() {
                               minWidth: '82px',
                               boxSizing: 'border-box',
                               lineHeight: '1.15',
-                              userSelect: 'none'
+                              userSelect: 'none',
+                              animation: state.isBlinking ? 'pulseBlink 1.5s infinite ease-in-out' : 'none'
                             }}
                             title={`Status: ${sample.status}${state.formattedTime ? ` | Remaining: ${state.formattedTime}` : ''} | Stage: ${state.label}`}
                           >
@@ -1823,6 +2258,96 @@ export default function Dashboard() {
                                 <span style={{ fontSize: '10px' }}>✓</span>
                                 <span>Completed</span>
                               </span>
+                            ) : state.phase === 'check_failed' ? (
+                              <button
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  handleRetryCheck(sample);
+                                }}
+                                className="btn-retry-check"
+                                style={{
+                                  background: 'rgba(148, 163, 184, 0.15)',
+                                  border: '1px solid rgba(148, 163, 184, 0.4)',
+                                  color: 'var(--text-primary)',
+                                  padding: '2px 7px',
+                                  borderRadius: '4px',
+                                  fontSize: '9px',
+                                  fontWeight: 600,
+                                  cursor: 'pointer',
+                                  display: 'inline-flex',
+                                  alignItems: 'center',
+                                  gap: '3px',
+                                  whiteSpace: 'nowrap',
+                                  lineHeight: '1.2'
+                                }}
+                                title="Click to retry querying LIS for this barcode"
+                              >
+                                <RefreshCw size={10} />
+                                <span>Retry Check</span>
+                              </button>
+                            ) : state.phase === 'in_progress' ? (
+                              <div style={{
+                                display: 'flex',
+                                flexDirection: 'column',
+                                alignItems: 'center',
+                                gap: '1px'
+                              }}>
+                                <span style={{
+                                  fontSize: '9.5px',
+                                  fontWeight: 700,
+                                  color: state.color,
+                                  display: 'inline-flex',
+                                  alignItems: 'center',
+                                  gap: '3px',
+                                  whiteSpace: 'nowrap'
+                                }}>
+                                  <span style={{ display: 'inline-block', width: '8px', height: '8px', border: '1.5px solid #06b6d4', borderTopColor: 'transparent', borderRadius: '50%', animation: 'spin 1s linear infinite' }}></span>
+                                  <span>In Progress</span>
+                                </span>
+                                <span style={{
+                                  fontSize: '7px',
+                                  fontWeight: 600,
+                                  color: state.color,
+                                  opacity: 0.85,
+                                  textTransform: 'uppercase',
+                                  letterSpacing: '0.3px',
+                                  whiteSpace: 'nowrap'
+                                }}>
+                                  Querying LIS...
+                                </span>
+                              </div>
+                            ) : state.phase === 'awaiting_intake' ? (
+                              <div style={{
+                                display: 'flex',
+                                flexDirection: 'column',
+                                alignItems: 'center',
+                                gap: '1px'
+                              }}>
+                                <span style={{
+                                  fontSize: '9.5px',
+                                  fontWeight: 700,
+                                  color: state.color,
+                                  letterSpacing: '0.2px',
+                                  whiteSpace: 'nowrap',
+                                  display: 'inline-flex',
+                                  alignItems: 'center',
+                                  gap: '2px'
+                                }}>
+                                  <span>⚠️</span>
+                                  <span>Awaiting Intake</span>
+                                </span>
+                                <span style={{
+                                  fontSize: '7px',
+                                  fontWeight: 700,
+                                  color: state.color,
+                                  opacity: 0.9,
+                                  textTransform: 'uppercase',
+                                  letterSpacing: '0.4px',
+                                  whiteSpace: 'nowrap'
+                                }}>
+                                  Needs Receive
+                                </span>
+                              </div>
                             ) : (
                               <>
                                 <span style={{
@@ -1877,12 +2402,155 @@ export default function Dashboard() {
 
       {receiveModal && (
         <div className="modal-overlay" onClick={() => { setReceiveModal(null); setTimeout(() => inputRef.current?.focus(), 10); }}>
-          <div className="modal-content" onClick={e => e.stopPropagation()}>
-            <h3 className="modal-title">Confirm Received</h3>
-            <p className="modal-body">Are you sure you want to mark this sample as received?</p>
-            <div className="modal-actions">
-              <button className="btn-secondary" onClick={() => { setReceiveModal(null); setTimeout(() => inputRef.current?.focus(), 10); }}>No</button>
-              <button className="btn-primary" onClick={confirmMarkReceived}>Yes</button>
+          <div className="modal-content" style={{ maxWidth: '480px', width: '92%' }} onClick={e => e.stopPropagation()}>
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '1.25rem', borderBottom: '1px solid var(--border-color)', paddingBottom: '0.75rem' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem' }}>
+                <div style={{ width: '32px', height: '32px', borderRadius: '8px', background: 'rgba(16, 185, 129, 0.15)', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#10b981' }}>
+                  <CheckCircle size={18} />
+                </div>
+                <div>
+                  <h3 className="modal-title" style={{ margin: 0, fontSize: '1.1rem', lineHeight: '1.2' }}>Mark Sample as Received</h3>
+                  <span style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>Lab intake confirmation & SLA activation</span>
+                </div>
+              </div>
+              <button 
+                onClick={() => { setReceiveModal(null); setTimeout(() => inputRef.current?.focus(), 10); }}
+                style={{ background: 'transparent', border: 'none', color: 'var(--text-secondary)', cursor: 'pointer', fontSize: '1.2rem', lineHeight: 1, padding: '4px' }}
+                title="Close"
+              >
+                ✕
+              </button>
+            </div>
+
+            <div className="modal-body" style={{ margin: 0 }}>
+              {/* Sample Summary */}
+              <div style={{ background: 'var(--bg-secondary)', border: '1px solid var(--border-color)', borderRadius: '8px', padding: '0.75rem 1rem', marginBottom: '1.25rem' }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.4rem' }}>
+                  <span style={{ fontSize: '0.75rem', color: 'var(--text-secondary)', textTransform: 'uppercase', letterSpacing: '0.5px' }}>Barcode</span>
+                  <span style={{ fontFamily: 'monospace', fontWeight: 700, fontSize: '0.95rem', color: 'var(--text-primary)' }}>{receiveModal.barcode}</span>
+                </div>
+                {receiveModal.patient && (
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.4rem' }}>
+                    <span style={{ fontSize: '0.75rem', color: 'var(--text-secondary)', textTransform: 'uppercase', letterSpacing: '0.5px' }}>Patient</span>
+                    <span style={{ fontSize: '0.85rem', color: 'var(--text-primary)', fontWeight: 500 }}>{receiveModal.patient}</span>
+                  </div>
+                )}
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                  <span style={{ fontSize: '0.75rem', color: 'var(--text-secondary)', textTransform: 'uppercase', letterSpacing: '0.5px' }}>Current Status</span>
+                  {(() => {
+                    const normStatus = normalizeStatus(receiveModal.status, receiveModal.barcode, receiveModal.test);
+                    const isCollectedModal = normStatus.toLowerCase().includes('collected') || normStatus.toLowerCase().includes('batch');
+                    return (
+                      <span style={{ 
+                        fontSize: '0.75rem', 
+                        padding: '2px 8px', 
+                        borderRadius: '4px', 
+                        fontWeight: 600,
+                        background: isCollectedModal ? 'rgba(239, 68, 68, 0.15)' : 'rgba(59, 130, 246, 0.15)',
+                        color: isCollectedModal ? '#ef4444' : 'var(--accent-primary)',
+                        border: isCollectedModal ? '1px solid rgba(239, 68, 68, 0.3)' : '1px solid rgba(59, 130, 246, 0.3)'
+                      }}>
+                        {normStatus}
+                      </span>
+                    );
+                  })()}
+                </div>
+
+                {/* Tests & SLAs */}
+                {receiveModal.testDetails && receiveModal.testDetails.length > 0 && (
+                  <div style={{ marginTop: '0.75rem', paddingTop: '0.6rem', borderTop: '1px solid rgba(255, 255, 255, 0.06)' }}>
+                    <div style={{ fontSize: '0.72rem', color: 'var(--text-secondary)', marginBottom: '0.4rem', textTransform: 'uppercase', letterSpacing: '0.4px' }}>
+                      Configured Tests ({receiveModal.testDetails.length})
+                    </div>
+                    <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.4rem' }}>
+                      {receiveModal.testDetails.map((td: any, i: number) => (
+                        <div 
+                          key={i}
+                          style={{
+                            fontSize: '0.75rem',
+                            padding: '3px 7px',
+                            borderRadius: '4px',
+                            background: 'rgba(255, 255, 255, 0.04)',
+                            border: '1px solid var(--border-color)',
+                            display: 'flex',
+                            alignItems: 'center',
+                            gap: '4px'
+                          }}
+                        >
+                          <span style={{ fontWeight: 600, color: 'var(--text-primary)' }}>{td.testName || td.testCode || `Test ${i + 1}`}</span>
+                          <span style={{ fontSize: '0.7rem', color: 'var(--text-secondary)' }}>
+                            (Result: {td.intervalTime ?? receiveModal.intervalTime ?? 0}m{td.intervalTimeVerified ? `, Verif: ${td.intervalTimeVerified}m` : ''})
+                          </span>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+              </div>
+
+              {/* Result Completed Toggle Card */}
+              <label 
+                style={{
+                  display: 'flex',
+                  alignItems: 'flex-start',
+                  gap: '0.75rem',
+                  padding: '0.85rem 1rem',
+                  borderRadius: '8px',
+                  border: receiveResultCompleted ? '1px solid rgba(16, 185, 129, 0.5)' : '1px solid var(--border-color)',
+                  background: receiveResultCompleted ? 'rgba(16, 185, 129, 0.08)' : 'rgba(255, 255, 255, 0.02)',
+                  cursor: 'pointer',
+                  transition: 'all 0.2s ease',
+                  userSelect: 'none',
+                  marginBottom: '1.5rem'
+                }}
+              >
+                <input 
+                  type="checkbox"
+                  checked={receiveResultCompleted}
+                  onChange={e => setReceiveResultCompleted(e.target.checked)}
+                  style={{
+                    width: '18px',
+                    height: '18px',
+                    marginTop: '2px',
+                    cursor: 'pointer',
+                    accentColor: '#10b981'
+                  }}
+                />
+                <div style={{ flex: 1 }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                    <span style={{ fontWeight: 600, fontSize: '0.9rem', color: receiveResultCompleted ? '#10b981' : 'var(--text-primary)' }}>
+                      Result Completed
+                    </span>
+                    {receiveResultCompleted && (
+                      <span style={{ fontSize: '0.7rem', padding: '1px 5px', borderRadius: '3px', background: 'rgba(16, 185, 129, 0.2)', color: '#10b981', fontWeight: 600 }}>
+                        BYPASS RESULT SLA
+                      </span>
+                    )}
+                  </div>
+                  <p style={{ margin: '0.25rem 0 0 0', fontSize: '0.78rem', color: 'var(--text-secondary)', lineHeight: '1.4' }}>
+                    {receiveResultCompleted 
+                      ? "Immediately sets test status to Result Done, bypassing the Result SLA countdown. If verification SLA is configured, begins Phase 3 Verification tracking starting now."
+                      : "Transitions status to Sample Received and begins counting down the Result Done SLA from the current timestamp."
+                    }
+                  </p>
+                </div>
+              </label>
+            </div>
+
+            <div className="modal-actions" style={{ gap: '0.75rem' }}>
+              <button 
+                className="btn-secondary" 
+                onClick={() => { setReceiveModal(null); setTimeout(() => inputRef.current?.focus(), 10); }}
+              >
+                Cancel
+              </button>
+              <button 
+                className="btn-primary" 
+                style={receiveResultCompleted ? { background: '#10b981' } : {}}
+                onClick={confirmMarkReceived}
+              >
+                {receiveResultCompleted ? "Confirm (Result Done)" : "Confirm Received"}
+              </button>
             </div>
           </div>
         </div>

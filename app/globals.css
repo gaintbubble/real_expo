@@ -270,6 +270,9 @@ body {
 .table-row.status-completed td:first-child::before { background: var(--success); }
 .table-row.status-waiting td:first-child::before { background: var(--text-secondary); }
 .table-row.status-provisional td:first-child::before { background: #8b5cf6; }
+.table-row.status-pending-check td:first-child::before { background: #a855f7; }
+.table-row.status-checking td:first-child::before { background: #06b6d4; }
+.table-row.status-check-failed td:first-child::before { background: #64748b; }
 .table-row.status-collected {
   animation: blinkRed 1.5s infinite;
 }
@@ -306,6 +309,18 @@ body {
   border: 1px solid rgba(168, 85, 247, 0.35);
 }
 
+.status-badge.checking {
+  background: rgba(6, 182, 212, 0.15);
+  color: #06b6d4;
+  border: 1px solid rgba(6, 182, 212, 0.35);
+}
+
+.status-badge.check-failed {
+  background: rgba(148, 163, 184, 0.15);
+  color: #94a3b8;
+  border: 1px solid rgba(148, 163, 184, 0.35);
+}
+
 .status-badge.received {
   background: rgba(59, 130, 246, 0.15);
   color: var(--accent-primary);
@@ -322,8 +337,17 @@ body {
 }
 
 .status-badge.collected {
-  background: rgba(239, 68, 68, 0.15);
-  color: var(--danger);
+  background: rgba(239, 68, 68, 0.22);
+  color: #ef4444;
+  border: 1px solid rgba(239, 68, 68, 0.6);
+  animation: pulseBlink 1.5s infinite ease-in-out;
+}
+
+.status-badge.batch {
+  background: rgba(249, 115, 22, 0.22);
+  color: #f97316;
+  border: 1px solid rgba(249, 115, 22, 0.6);
+  animation: pulseBlink 1.5s infinite ease-in-out;
 }
 
 .status-badge.default {
@@ -779,33 +803,87 @@ body {
   100% { background-color: rgba(245, 158, 11, 0.05); }
 }
 
-.table-row.status-collected td {
-  animation: blinkRed 2s infinite ease-in-out;
+/* Critical Danger Alert for Pre-Intake (Sample Collected / Batch Generated) */
+.table-row.status-collected {
+  background-color: rgba(239, 68, 68, 0.12) !important;
+  border-left: 4px solid #ef4444 !important;
+  animation: blinkRowPulse 2s infinite ease-in-out !important;
 }
 
+.table-row.status-collected td {
+  border-top: 1px solid rgba(239, 68, 68, 0.35);
+  border-bottom: 1px solid rgba(239, 68, 68, 0.35);
+  animation: blinkRedAlert 2s infinite ease-in-out;
+}
 
-.table-row.status-overdue td:first-child::before {
+@keyframes pulseBlink {
+  0% { transform: scale(1); opacity: 0.92; box-shadow: 0 0 0 0 rgba(239, 68, 68, 0.4); }
+  50% { transform: scale(1.03); opacity: 1; box-shadow: 0 0 8px 2px rgba(239, 68, 68, 0.5); }
+  100% { transform: scale(1); opacity: 0.92; box-shadow: 0 0 0 0 rgba(239, 68, 68, 0.4); }
+}
+
+@keyframes blinkRowPulse {
+  0% { background-color: rgba(239, 68, 68, 0.08); }
+  50% { background-color: rgba(239, 68, 68, 0.22); }
+  100% { background-color: rgba(239, 68, 68, 0.08); }
+}
+
+@keyframes blinkRedAlert {
+  0% { background-color: rgba(239, 68, 68, 0.06); }
+  50% { background-color: rgba(239, 68, 68, 0.28); }
+  100% { background-color: rgba(239, 68, 68, 0.06); }
+}
+
+.table-row.status-overdue td:first-child::before,
+.table-row.status-overdue-critical td:first-child::before {
   background: var(--danger);
   animation: blinkRed 1s infinite ease-in-out;
 }
 
-/* TAT Breach Classes */
-.table-row.status-result-overdue td {
-  background-color: rgba(245, 158, 11, 0.15);
+/* SLA Breach Classes */
+.table-row.status-result-overdue {
+  background-color: rgba(239, 68, 68, 0.08) !important;
+  border-left: 4px solid #ef4444 !important;
 }
+
+.table-row.status-result-overdue td {
+  border-top: 1px solid rgba(239, 68, 68, 0.3);
+  border-bottom: 1px solid rgba(239, 68, 68, 0.3);
+  animation: blinkAlert 1.5s infinite ease-in-out;
+}
+
 .table-row.status-result-overdue td:first-child::before {
-  background: var(--warning);
+  background: var(--danger);
+}
+
+.table-row.status-verification-overdue {
+  background-color: rgba(168, 85, 247, 0.08) !important;
+  border-left: 4px solid #a855f7 !important;
 }
 
 .table-row.status-verification-overdue td {
+  border-top: 1px solid rgba(168, 85, 247, 0.3);
+  border-bottom: 1px solid rgba(168, 85, 247, 0.3);
   animation: blinkPurple 1.5s infinite ease-in-out;
 }
+
 .table-row.status-verification-overdue td:first-child::before {
   background: var(--accent-secondary);
 }
 
 @keyframes blinkPurple {
   0% { background-color: rgba(139, 92, 246, 0.05); }
-  50% { background-color: rgba(139, 92, 246, 0.35); }
+  50% { background-color: rgba(139, 92, 246, 0.28); }
   100% { background-color: rgba(139, 92, 246, 0.05); }
 }
+
+.btn-retry-check:hover {
+  background: rgba(148, 163, 184, 0.3) !important;
+  border-color: rgba(148, 163, 184, 0.6) !important;
+}
+
+@keyframes spin {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}
+
