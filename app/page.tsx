@@ -890,13 +890,13 @@ export default function Dashboard() {
         }
 
         // Extension Response & Timeout Handling:
-        // If checking has been active for >= 8 seconds without response, mark as Extension Not Responding or Check Failed
+        // If checking has been active for >= 10 seconds without response, mark as Extension Not Responding or Check Failed
         if (sLower.includes('checking') && (!sample.receivedDate || sample.receivedDate === '--')) {
           const dispatchMs = checkDispatchedTimeRef.current.get(sample.barcode);
           const fallbackCheckMs = sample.nextCheckTime ? new Date(sample.nextCheckTime).getTime() : 0;
           const effectiveDispatchMs = dispatchMs || fallbackCheckMs;
 
-          if (effectiveDispatchMs > 0 && (nowMs - effectiveDispatchMs >= 8000)) {
+          if (effectiveDispatchMs > 0 && (nowMs - effectiveDispatchMs >= 10000)) {
             checkDispatchedTimeRef.current.delete(sample.barcode);
             const failureReason = ackReceivedBarcodesRef.current.has(sample.barcode) ? 'Check Failed' : 'Extension Not Responding';
             setSamples(prev => prev.map(s => {

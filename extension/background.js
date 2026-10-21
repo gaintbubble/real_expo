@@ -1,9 +1,12 @@
-let API_URL = "http://localhost:3000/api/extension";
+const DEFAULT_API_URL = "https://real-expo.vercel.app/api/extension";
+let API_URL = DEFAULT_API_URL;
 
 // Check if we have a saved API URL or storage override
 chrome.storage.local.get(["dashboardUrl"], (result) => {
   if (result.dashboardUrl) {
     API_URL = `${result.dashboardUrl}/api/extension`;
+  } else {
+    API_URL = DEFAULT_API_URL;
   }
 });
 
@@ -107,18 +110,32 @@ if (chrome.runtime.onMessageExternal) {
   });
 }
 
-// Periodic fallback poll: Check for pending barcodes every 10 seconds
+// Periodic fallback poll: Check for pending barcodes every 2.5 seconds
+let isPolling = false;
 setInterval(() => {
   chrome.storage.local.get(["isScraperActive"], async (result) => {
-    if (result.isScraperActive === false) {
+    if (result.isScraperActive === false || isPolling) {
       return;
     }
 
+    isPolling = true;
     try {
-      const response = await fetch(`${API_URL}/get-pending`);
+      let response = await fetch(`${API_URL}/get-pending`).catch(() => null);
+      if (!response || !response.ok) {
+        if (API_URL !== DEFAULT_API_URL) {
+          response = await fetch(`${DEFAULT_API_URL}/get-pending`).catch(() => null);
+        }
+      }
+
+      if (!response || !response.ok) {
+        isPolling = false;
+        return;
+      }
+
       const data = await response.json();
 
       if (!data.success || !data.samples || data.samples.length === 0) {
+        isPolling = false;
         return;
       }
 
@@ -127,17 +144,21 @@ setInterval(() => {
 
       // Tell the LIS page to search by broadcasting to all open tabs
       chrome.tabs.query({}, function(tabs) {
-        tabs.forEach(tab => {
-          if (tab.id) {
-            chrome.tabs.sendMessage(tab.id, { 
-              action: "SEARCH_BARCODE", 
-              barcode: sample.barcode 
-            }).catch(() => {});
-          }
-        });
+        if (tabs && tabs.length > 0) {
+          tabs.forEach(tab => {
+            if (tab.id) {
+              chrome.tabs.sendMessage(tab.id, { 
+                action: "SEARCH_BARCODE", 
+                barcode: sample.barcode 
+              }).catch(() => {});
+            }
+          });
+        }
       });
     } catch (error) {
       // Ignore background network failure silently
+    } finally {
+      isPolling = false;
     }
   });
-}, 10000);
+}, 2500);

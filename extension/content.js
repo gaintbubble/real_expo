@@ -1,7 +1,13 @@
 // --- 1. DRAW THE FLOATING ON/OFF BUTTON (Only on LIS / external pages) ---
 function injectUI() {
-  // Only inject floating button if not on localhost dashboard to keep dashboard clean
-  if (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1') {
+  // Only inject floating button if not on dashboard to keep dashboard clean
+  if (
+    window.location.hostname === 'localhost' || 
+    window.location.hostname === '127.0.0.1' ||
+    window.location.hostname === 'real-expo.vercel.app' ||
+    window.location.hostname.endsWith('.vercel.app') ||
+    document.querySelector('.dashboard-container')
+  ) {
     return;
   }
 
@@ -54,8 +60,34 @@ function injectUI() {
     };
   });
 
+  const serverTag = document.createElement("span");
+  serverTag.style.fontSize = "11px";
+  serverTag.style.color = "#666";
+  serverTag.style.cursor = "pointer";
+  serverTag.title = "Click to view or change backend server URL";
+  
+  chrome.storage.local.get(["dashboardUrl"], (result) => {
+    const url = result.dashboardUrl || "https://real-expo.vercel.app";
+    serverTag.innerText = `(${url.replace('https://', '').replace('http://', '').split('/')[0]})`;
+  });
+
+  serverTag.onclick = () => {
+    chrome.storage.local.get(["dashboardUrl"], (result) => {
+      const current = result.dashboardUrl || "https://real-expo.vercel.app";
+      const newUrl = prompt("Enter TAT Tracker Server URL:", current);
+      if (newUrl && newUrl.trim()) {
+        const cleaned = newUrl.trim().replace(/\/$/, "");
+        chrome.storage.local.set({ dashboardUrl: cleaned });
+        chrome.runtime.sendMessage({ action: "SET_DASHBOARD_URL", url: cleaned });
+        serverTag.innerText = `(${cleaned.replace('https://', '').replace('http://', '').split('/')[0]})`;
+        alert("Server URL updated to: " + cleaned);
+      }
+    });
+  };
+
   container.appendChild(label);
   container.appendChild(btn);
+  container.appendChild(serverTag);
   document.body.appendChild(container);
 }
 

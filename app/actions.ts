@@ -229,7 +229,7 @@ export async function getAllTrackedSamples(dateStr?: string) {
             const refMs = checkTargetMs > 0 ? checkTargetMs : scanMs;
             const elapsedSecs = refMs > 0 ? Math.floor((now.getTime() - refMs) / 1000) : 10;
 
-            if (elapsedSecs >= 8) {
+            if (elapsedSecs >= 10) {
               normStatus = 'Extension Not Responding';
               s.currentStatus = 'Extension Not Responding';
               if (!s.testName || s.testName === 'Resolving...' || s.testName === 'Fetching from LIS...' || s.testName === 'CBC') {
@@ -244,7 +244,7 @@ export async function getAllTrackedSamples(dateStr?: string) {
           } else {
             // Pending Check whose countdown timer has reached 0
             const elapsedSecs = checkTargetMs > 0 ? Math.floor((now.getTime() - checkTargetMs) / 1000) : 10;
-            if (elapsedSecs >= 8) {
+            if (elapsedSecs >= 10) {
               normStatus = 'Extension Not Responding';
               s.currentStatus = 'Extension Not Responding';
               if (!s.testName || s.testName === 'Resolving...' || s.testName === 'Fetching from LIS...' || s.testName === 'CBC') {
