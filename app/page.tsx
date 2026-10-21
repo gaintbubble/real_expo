@@ -766,6 +766,12 @@ export default function Dashboard() {
           isCompleted: isCompleted,
         };
       });
+      formattedSamples.forEach(f => {
+        const fStatus = (f.status || '').toLowerCase();
+        if (!fStatus.includes('checking') || f.isCompleted || (f.receivedDate && f.receivedDate !== '--')) {
+          checkDispatchedTimeRef.current.delete(f.barcode);
+        }
+      });
       setSamples(prev => {
         // Prevent table reset flicker: preserve any in-flight optimistic samples not yet in formattedSamples
         const pendingOptimistic = prev.filter(p => 
@@ -890,13 +896,12 @@ export default function Dashboard() {
         }
 
         // Extension Response & Timeout Handling:
-        // If checking has been active for >= 10 seconds without response, mark as Extension Not Responding or Check Failed
-        if (sLower.includes('checking') && (!sample.receivedDate || sample.receivedDate === '--')) {
+        // If checking was actively dispatched in this session and active for >= 10 seconds without response, mark as Extension Not Responding or Check Failed
+        if (sLower.includes('checking') && !sample.isCompleted && (!sample.receivedDate || sample.receivedDate === '--')) {
           const dispatchMs = checkDispatchedTimeRef.current.get(sample.barcode);
-          const fallbackCheckMs = sample.nextCheckTime ? new Date(sample.nextCheckTime).getTime() : 0;
-          const effectiveDispatchMs = dispatchMs || fallbackCheckMs;
 
-          if (effectiveDispatchMs > 0 && (nowMs - effectiveDispatchMs >= 10000)) {
+          // ONLY time out if this active browser session dispatched the check and 10 seconds elapsed
+          if (dispatchMs && (nowMs - dispatchMs >= 10000)) {
             checkDispatchedTimeRef.current.delete(sample.barcode);
             const failureReason = ackReceivedBarcodesRef.current.has(sample.barcode) ? 'Check Failed' : 'Extension Not Responding';
             setSamples(prev => prev.map(s => {
@@ -1121,9 +1126,8 @@ export default function Dashboard() {
           return s;
         }));
 
-        if (delayMins === 0) {
-          triggerBarcodeCheckServer(response.sample.id, cleanBarcode).catch(() => {});
-        }
+        // Note: saveBarcodeToDatabase already initializes status to Checking... and triggerExtensionCheck was dispatched immediately above.
+        // We do NOT call triggerBarcodeCheckServer here to avoid overwriting fast LIS scraper results.
 
         await loadRealData();
       } else {

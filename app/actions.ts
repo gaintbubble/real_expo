@@ -204,60 +204,28 @@ export async function getAllTrackedSamples(dateStr?: string) {
     // Check pre-check samples: handle live countdown, checking, and check-failed lifecycle
     // NEVER inject hardcoded "CBC" or "Sample Collected" dummy data!
     for (const s of samples) {
+      // If sample has receivedTime or resultTime or isCompleted, its status is ALREADY confirmed by LIS!
+      // NEVER touch completed or received samples!
+      if (s.receivedTime || s.isCompleted) {
+        s.currentStatus = normalizeStatus(s.currentStatus, s.barcode, s.testName, s.serviceCd);
+        continue;
+      }
+
       let normStatus = normalizeStatus(s.currentStatus, s.barcode, s.testName, s.serviceCd);
-      const isPreCheck = (normStatus === 'Pending Check' || normStatus === 'Checking...' || normStatus === 'Check Failed' || normStatus === 'Extension Not Responding') && !s.receivedTime;
+      const isPreCheck = (normStatus === 'Pending Check' || normStatus === 'Checking...' || normStatus === 'Check Failed' || normStatus === 'Extension Not Responding');
 
       if (isPreCheck) {
         const checkTargetMs = s.nextCheckTime ? new Date(s.nextCheckTime).getTime() : 0;
         const isFutureCountdown = checkTargetMs > now.getTime();
 
         if (isFutureCountdown) {
-          normStatus = 'Pending Check';
           s.currentStatus = 'Pending Check';
           if (!s.testName || s.testName === 'CBC') {
             s.testName = 'Resolving...';
           }
         } else {
-          // Timer has elapsed or trigger was 0 / disabled
-          if (normStatus === 'Check Failed' || normStatus === 'Extension Not Responding') {
-            s.currentStatus = normStatus;
-            if (!s.testName || s.testName === 'Resolving...' || s.testName === 'Fetching from LIS...' || s.testName === 'CBC') {
-              s.testName = 'Not Found';
-            }
-          } else if (normStatus === 'Checking...') {
-            const scanMs = s.createdAt ? new Date(s.createdAt).getTime() : checkTargetMs;
-            const refMs = checkTargetMs > 0 ? checkTargetMs : scanMs;
-            const elapsedSecs = refMs > 0 ? Math.floor((now.getTime() - refMs) / 1000) : 10;
-
-            if (elapsedSecs >= 10) {
-              normStatus = 'Extension Not Responding';
-              s.currentStatus = 'Extension Not Responding';
-              if (!s.testName || s.testName === 'Resolving...' || s.testName === 'Fetching from LIS...' || s.testName === 'CBC') {
-                s.testName = 'Not Found';
-              }
-            } else {
-              s.currentStatus = 'Checking...';
-              if (!s.testName || s.testName === 'Resolving...' || s.testName === 'CBC') {
-                s.testName = 'Fetching from LIS...';
-              }
-            }
-          } else {
-            // Pending Check whose countdown timer has reached 0
-            const elapsedSecs = checkTargetMs > 0 ? Math.floor((now.getTime() - checkTargetMs) / 1000) : 10;
-            if (elapsedSecs >= 10) {
-              normStatus = 'Extension Not Responding';
-              s.currentStatus = 'Extension Not Responding';
-              if (!s.testName || s.testName === 'Resolving...' || s.testName === 'Fetching from LIS...' || s.testName === 'CBC') {
-                s.testName = 'Not Found';
-              }
-            } else {
-              normStatus = 'Checking...';
-              s.currentStatus = 'Checking...';
-              if (!s.testName || s.testName === 'Resolving...' || s.testName === 'CBC') {
-                s.testName = 'Fetching from LIS...';
-              }
-            }
-          }
+          // Keep whatever status the sample has in the database (e.g. 'Checking...', 'Check Failed', 'Extension Not Responding')
+          s.currentStatus = normStatus;
         }
       } else {
         s.currentStatus = normStatus;
@@ -807,12 +775,31 @@ export async function retrySampleCheck(id: string, barcode?: string) {
 
 export async function triggerBarcodeCheckServer(id: string, barcode?: string) {
   try {
+    const existing = await prisma.trackedSample.findUnique({
+      where: { id }
+    });
+
+    if (!existing) {
+      return { success: false, message: "Sample not found" };
+    }
+
+    // Never overwrite a sample that has already completed or been received/verified by LIS
+    if (existing.isCompleted || existing.receivedTime || existing.resultTime) {
+      return { success: false, message: "Sample already completed or received" };
+    }
+
+    const norm = normalizeStatus(existing.currentStatus, existing.barcode, existing.testName, existing.serviceCd);
+    const completedOrTerminal = ['verified', 'result done', 'sample collected', 'collected', 'approved', 'dispatched', 'sample received'];
+    if (completedOrTerminal.some(term => norm.toLowerCase().includes(term))) {
+      return { success: false, message: "Sample already has verified/collected LIS status" };
+    }
+
     const now = new Date();
     const updated = await prisma.trackedSample.update({
       where: { id },
       data: {
         currentStatus: "Checking...",
-        testName: "Fetching from LIS..."
+        testName: (!existing.testName || existing.testName === "Resolving..." || existing.testName === "Not Found") ? "Fetching from LIS..." : existing.testName
       }
     });
 
@@ -833,11 +820,30 @@ export async function triggerBarcodeCheckServer(id: string, barcode?: string) {
 
 export async function markCheckFailed(id: string, barcode?: string, reason: string = "Extension Not Responding") {
   try {
+    const existing = await prisma.trackedSample.findUnique({
+      where: { id }
+    });
+
+    if (!existing) {
+      return { success: false, message: "Sample not found" };
+    }
+
+    // Never mark a sample failed if it has already completed or been received/verified by LIS
+    if (existing.isCompleted || existing.receivedTime || existing.resultTime) {
+      return { success: false, message: "Sample already completed or received" };
+    }
+
+    const norm = normalizeStatus(existing.currentStatus, existing.barcode, existing.testName, existing.serviceCd);
+    const completedOrTerminal = ['verified', 'result done', 'sample collected', 'collected', 'approved', 'dispatched', 'sample received'];
+    if (completedOrTerminal.some(term => norm.toLowerCase().includes(term))) {
+      return { success: false, message: "Sample already has verified/collected LIS status" };
+    }
+
     const updated = await prisma.trackedSample.update({
       where: { id },
       data: {
         currentStatus: reason,
-        testName: "Not Found"
+        testName: (!existing.testName || existing.testName === "Fetching from LIS..." || existing.testName === "Resolving...") ? "Not Found" : existing.testName
       }
     });
 
