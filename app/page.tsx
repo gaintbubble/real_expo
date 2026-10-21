@@ -1,7 +1,7 @@
 "use client";
 
 import React, { useState, useRef, useEffect, useMemo, useCallback } from 'react';
-import { saveBarcodeToDatabase, getAllTrackedSamples, clearAllSamples, deleteSample, updateSampleBarcode, markSampleReceived, extendSampleTime, simulateFalseTrigger, toggleSampleProvisional, retrySampleCheck, triggerBarcodeCheckServer } from './actions';
+import { saveBarcodeToDatabase, getAllTrackedSamples, clearAllSamples, deleteSample, updateSampleBarcode, markSampleReceived, extendSampleTime, simulateFalseTrigger, toggleSampleProvisional, retrySampleCheck, triggerBarcodeCheckServer, markCheckFailed } from './actions';
 import { getDepartments } from './actions/departments';
 import { DatePicker } from './components/DatePicker';
 import { Edit2, Trash2, Barcode, CheckCircle, Volume2, VolumeX, X as XIcon, ChevronDown, Bell, Search, RefreshCw } from 'lucide-react';
@@ -226,9 +226,10 @@ export function getTriggerCountdownState(sample: Sample, nowMs: number): Trigger
     const rawScan = sample.rawCreatedAt || (sample as any).createdAt;
     const scanMs = rawScan ? new Date(rawScan).getTime() : 0;
     const safeScanMs = isNaN(scanMs) ? 0 : scanMs;
-    const trigMins = sample.triggerTime ?? (sample.departments?.some(d => d.toLowerCase() === 'haematology') ? 2 : 2);
+    // Strict Toggle Evaluation: If triggerTime is null, undefined, or 0, delay is strictly 0 mins (no fallback to 2 mins)
+    const trigMins = (sample.triggerTime != null && sample.triggerTime > 0) ? sample.triggerTime : 0;
     let initialCheckTargetMs = (safeScanMs > 0 && trigMins > 0) ? (safeScanMs + trigMins * 60000) : 0;
-    if (initialCheckTargetMs === 0 && sample.nextCheckTime) {
+    if (trigMins > 0 && initialCheckTargetMs === 0 && sample.nextCheckTime) {
       const nctMs = new Date(sample.nextCheckTime).getTime();
       if (!isNaN(nctMs)) initialCheckTargetMs = nctMs;
     }
@@ -236,8 +237,8 @@ export function getTriggerCountdownState(sample: Sample, nowMs: number): Trigger
     const isPendingCheckStatus = sLower.includes('pending check') || sLower.includes('scanned');
     const diffSecs = initialCheckTargetMs > 0 ? Math.ceil((initialCheckTargetMs - nowMs) / 1000) : 0;
 
-    // Condition 1: Timer Counting Down (Pending Check with diffSecs > 0)
-    if (isPendingCheckStatus && diffSecs > 0) {
+    // Condition 1: Timer Counting Down (Pending Check with trigger enabled and diffSecs > 0)
+    if (isPendingCheckStatus && trigMins > 0 && diffSecs > 0) {
       const mins = Math.floor(diffSecs / 60);
       const secs = diffSecs % 60;
       return {
@@ -251,13 +252,13 @@ export function getTriggerCountdownState(sample: Sample, nowMs: number): Trigger
       };
     }
 
-    // Condition 2: Timer Hits 00:00 (Check Dispatched / In Progress)
-    const isChecking = sLower.includes('checking') || (isPendingCheckStatus && diffSecs <= 0 && diffSecs >= -20);
+    // Condition 2: Timer Hits 00:00 OR Trigger Disabled (Check Dispatched / In Progress / Checking...)
+    const isChecking = sLower.includes('checking') || (isPendingCheckStatus && trigMins === 0) || (isPendingCheckStatus && diffSecs <= 0 && diffSecs >= -20);
     if (isChecking) {
       return {
         phase: 'in_progress',
         label: 'In Progress',
-        formattedTime: 'In Progress',
+        formattedTime: 'Checking...',
         isOverdue: false,
         isBlinking: false,
         bg: 'rgba(6, 182, 212, 0.12)',
@@ -267,7 +268,7 @@ export function getTriggerCountdownState(sample: Sample, nowMs: number): Trigger
     }
 
     // Condition 3: Check Times Out / Extension No Response / Failed
-    const isCheckFailed = sLower.includes('check failed') || sLower.includes('failed') || sLower.includes('offline') || (isPendingCheckStatus && diffSecs < -20);
+    const isCheckFailed = sLower.includes('check failed') || sLower.includes('extension not responding') || sLower.includes('failed') || sLower.includes('offline') || (isPendingCheckStatus && trigMins > 0 && diffSecs < -20);
     if (isCheckFailed) {
       return {
         phase: 'check_failed',
@@ -783,28 +784,41 @@ export default function Dashboard() {
   // 1-second live ticker to keep countdowns and timers updating live on screen
   const [liveTick, setLiveTick] = useState(0);
   const dispatchedBarcodesRef = useRef<Set<string>>(new Set());
+  const checkDispatchedTimeRef = useRef<Map<string, number>>(new Map());
+  const ackReceivedBarcodesRef = useRef<Set<string>>(new Set());
 
   // Communication Bridge: Dispatch lookup to browser extension / background worker
-  const dispatchExtensionLookup = useCallback((barcode: string, departmentId?: string, departmentTriggerTime?: number) => {
+  const triggerExtensionCheck = useCallback((barcode: string, departmentId?: string, departmentTriggerTime?: number) => {
     // Diagnostic log specified in requirements:
+    console.log('[Dashboard] Dispatching check event for barcode:', barcode);
     console.log(`[Dashboard] Trigger timer expired for barcode: ${barcode}. Sending lookup request...`);
 
     const payload = {
       barcode,
       departmentId: departmentId || 'HAEMATOLOGY',
-      departmentTriggerTime: departmentTriggerTime ?? 2,
+      departmentTriggerTime: departmentTriggerTime ?? 0,
       timestamp: new Date().toISOString()
     };
 
+    // Track dispatch timestamp for extension response timeout handling
+    checkDispatchedTimeRef.current.set(barcode, Date.now());
+
     if (typeof window !== 'undefined') {
       // 1. Post message to window (content.js listening)
+      window.postMessage({
+        type: 'CHECK_BARCODE_DATA',
+        action: 'SEARCH_BARCODE',
+        ...payload
+      }, '*');
+
       window.postMessage({
         type: 'LIS_TAT_TRIGGER_CHECK',
         action: 'SEARCH_BARCODE',
         ...payload
       }, '*');
 
-      // 2. Dispatch custom DOM event
+      // 2. Dispatch custom DOM events
+      window.dispatchEvent(new CustomEvent('CHECK_BARCODE_DATA', { detail: payload }));
       window.dispatchEvent(new CustomEvent('LIS_TAT_TRIGGER_CHECK', { detail: payload }));
 
       // 3. Direct chrome runtime if injected in same context
@@ -812,7 +826,7 @@ export default function Dashboard() {
         const winAny = window as any;
         if (typeof winAny.chrome !== 'undefined' && winAny.chrome?.runtime?.sendMessage) {
           winAny.chrome.runtime.sendMessage({
-            action: 'SEARCH_BARCODE',
+            action: 'CHECK_BARCODE_DATA',
             ...payload
           }, () => {
             if (winAny.chrome.runtime.lastError) { /* ignore */ }
@@ -824,7 +838,9 @@ export default function Dashboard() {
     }
   }, []);
 
-  // Check timers every second: when remainingTime <= 0 on a pre-check barcode, dispatch lookup immediately
+  const dispatchExtensionLookup = triggerExtensionCheck;
+
+  // Check timers every second: countdown timer expiration & 8-10s timeout handling
   useEffect(() => {
     const timer = setInterval(() => {
       setLiveTick(t => t + 1);
@@ -839,7 +855,7 @@ export default function Dashboard() {
           const rawScan = sample.rawCreatedAt || (sample as any).createdAt;
           const scanMs = rawScan ? new Date(rawScan).getTime() : 0;
           const safeScanMs = isNaN(scanMs) ? 0 : scanMs;
-          const trigMins = sample.triggerTime ?? (sample.departments?.some(d => d.toLowerCase() === 'haematology') ? 2 : 2);
+          const trigMins = (sample.triggerTime != null && sample.triggerTime > 0) ? sample.triggerTime : 0;
           let targetMs = (safeScanMs > 0 && trigMins > 0) ? (safeScanMs + trigMins * 60000) : 0;
           if (targetMs === 0 && sample.nextCheckTime) {
             const nctMs = new Date(sample.nextCheckTime).getTime();
@@ -848,9 +864,10 @@ export default function Dashboard() {
 
           const diffSecs = targetMs > 0 ? Math.ceil((targetMs - nowMs) / 1000) : 0;
 
-          // When remainingTime <= 0, actively dispatch trigger event to extension
+          // When remainingTime <= 0 on a pre-check barcode, actively dispatch trigger event to extension
           if (diffSecs <= 0 && !dispatchedBarcodesRef.current.has(sample.barcode)) {
             dispatchedBarcodesRef.current.add(sample.barcode);
+            checkDispatchedTimeRef.current.set(sample.barcode, Date.now());
 
             // Update sample in local state to Checking... with Fetching from LIS...
             setSamples(prev => prev.map(s => {
@@ -865,21 +882,49 @@ export default function Dashboard() {
             }));
 
             // Actively dispatch lookup
-            dispatchExtensionLookup(sample.barcode, sample.departments?.[0], sample.triggerTime ?? undefined);
+            triggerExtensionCheck(sample.barcode, sample.departments?.[0], sample.triggerTime ?? 0);
 
             // Update status on server
             triggerBarcodeCheckServer(sample.id, sample.barcode).catch(() => {});
+          }
+        }
+
+        // Extension Response & Timeout Handling:
+        // If checking has been active for >= 8 seconds without response, mark as Extension Not Responding or Check Failed
+        if (sLower.includes('checking') && (!sample.receivedDate || sample.receivedDate === '--')) {
+          const dispatchMs = checkDispatchedTimeRef.current.get(sample.barcode);
+          const fallbackCheckMs = sample.nextCheckTime ? new Date(sample.nextCheckTime).getTime() : 0;
+          const effectiveDispatchMs = dispatchMs || fallbackCheckMs;
+
+          if (effectiveDispatchMs > 0 && (nowMs - effectiveDispatchMs >= 8000)) {
+            checkDispatchedTimeRef.current.delete(sample.barcode);
+            const failureReason = ackReceivedBarcodesRef.current.has(sample.barcode) ? 'Check Failed' : 'Extension Not Responding';
+            setSamples(prev => prev.map(s => {
+              if (s.barcode === sample.barcode) {
+                return {
+                  ...s,
+                  status: failureReason,
+                  test: (!s.test || s.test === 'Fetching from LIS...' || s.test === 'Resolving...' || s.test === 'Waiting...') ? 'Not Found' : s.test
+                };
+              }
+              return s;
+            }));
+
+            // Persist to server so polling doesn't overwrite with 'Checking...'
+            markCheckFailed(sample.id, sample.barcode, failureReason).catch(() => {});
           }
         }
       });
     }, 1000);
 
     return () => clearInterval(timer);
-  }, [samples, dispatchExtensionLookup]);
+  }, [samples, triggerExtensionCheck]);
 
   // Retry check handler for [Retry Check] button
   const handleRetryCheck = useCallback(async (sample: Sample) => {
     dispatchedBarcodesRef.current.delete(sample.barcode);
+    ackReceivedBarcodesRef.current.delete(sample.barcode);
+    checkDispatchedTimeRef.current.set(sample.barcode, Date.now());
 
     // Update locally to Checking... immediately
     setSamples(prev => prev.map(s => {
@@ -894,32 +939,44 @@ export default function Dashboard() {
     }));
 
     // Dispatch lookup
-    dispatchExtensionLookup(sample.barcode, sample.departments?.[0], sample.triggerTime ?? undefined);
+    triggerExtensionCheck(sample.barcode, sample.departments?.[0], sample.triggerTime ?? 0);
 
     // Server action
     await retrySampleCheck(sample.id, sample.barcode);
 
     // Re-fetch shortly after
     setTimeout(() => loadRealData(), 1500);
-  }, [dispatchExtensionLookup, loadRealData]);
+  }, [triggerExtensionCheck, loadRealData]);
 
-  // Listen for extension status updates relayed to the window
+  // Listen for extension status updates and acknowledgments relayed to the window
   useEffect(() => {
-    const handleUpdate = () => {
-      loadRealData();
-    };
-
-    window.addEventListener('LIS_STATUS_UPDATED', handleUpdate);
-    const messageHandler = (e: MessageEvent) => {
-      if (e.data && e.data.type === 'LIS_STATUS_UPDATED') {
-        loadRealData();
+    const handleAck = (e: any) => {
+      const barcode = e?.detail?.barcode || e?.data?.barcode;
+      if (barcode) {
+        ackReceivedBarcodesRef.current.add(String(barcode).trim());
+        console.log('[Dashboard] Received ACK from extension for barcode:', barcode);
       }
     };
-    window.addEventListener('message', messageHandler);
+
+    const handleWindowMessage = (e: MessageEvent) => {
+      if (e.data && typeof e.data === 'object') {
+        if (e.data.type === 'EXTENSION_ACK' && e.data.barcode) {
+          ackReceivedBarcodesRef.current.add(String(e.data.barcode).trim());
+          console.log('[Dashboard] Received ACK from extension for barcode:', e.data.barcode);
+        } else if (e.data.type === 'LIS_STATUS_UPDATED') {
+          loadRealData();
+        }
+      }
+    };
+
+    window.addEventListener('EXTENSION_ACK', handleAck as any);
+    window.addEventListener('LIS_STATUS_UPDATED', () => loadRealData());
+    window.addEventListener('message', handleWindowMessage);
 
     return () => {
-      window.removeEventListener('LIS_STATUS_UPDATED', handleUpdate);
-      window.removeEventListener('message', messageHandler);
+      window.removeEventListener('EXTENSION_ACK', handleAck as any);
+      window.removeEventListener('LIS_STATUS_UPDATED', () => loadRealData());
+      window.removeEventListener('message', handleWindowMessage);
     };
   }, [loadRealData]);
 
@@ -957,10 +1014,12 @@ export default function Dashboard() {
     const now = new Date();
     const effectiveDept = (activeTab && activeTab.trim()) ? activeTab.trim() : "HAEMATOLOGY";
     const currentDept = departments.find(d => d.name.toLowerCase() === effectiveDept.toLowerCase());
-    let delayMins = currentDept?.triggerTime ?? (effectiveDept.toLowerCase() === 'haematology' ? 2 : 0);
-    if (delayMins <= 0 && effectiveDept.toLowerCase() === 'haematology') {
-      delayMins = 2;
-    }
+    
+    // Strict Toggle Evaluation:
+    // If trigger_enabled === false OR trigger_time === 0 (or null/undefined), delay is strictly 0 mins (no fallback to 2 mins)
+    // Only if trigger_enabled === true and triggerTime > 0, use configured duration.
+    const isTriggerEnabled = Boolean(currentDept && currentDept.triggerTime != null && currentDept.triggerTime > 0);
+    const delayMins = isTriggerEnabled ? (currentDept!.triggerTime as number) : 0;
 
     let cleanBarcode = currentInput;
     let requestedTests: string[] = [];
@@ -977,29 +1036,30 @@ export default function Dashboard() {
     if (requestedTests.length > 0) {
       defaultTestDetails = requestedTests.map(t => ({
         name: t,
-        status: "Pending Check",
+        status: delayMins > 0 ? "Pending Check" : "Checking...",
         intervalTime: 10,
         intervalTimeVerified: 15,
         department: effectiveDept,
         isUncollected: false
       }));
     } else {
-      // Do NOT set hardcoded "CBC"! Show clean placeholder "Resolving..."
       defaultTestDetails = [];
     }
 
     const defaultTestName = defaultTestDetails.length > 0 
       ? defaultTestDetails.map(t => t.name).join(', ') 
-      : "Resolving...";
+      : (delayMins > 0 ? "Resolving..." : "Fetching from LIS...");
 
-    // Immediately create the row with actual order details in Stage 1 pre-check status
+    const initialStatus = delayMins > 0 ? "Pending Check" : "Checking...";
+
+    // Immediately create the row with actual order details
     const optimisticSample: Sample = {
       id: `temp-${cleanBarcode}-${Date.now()}`,
       barcode: cleanBarcode,
       patient: "--",
       test: defaultTestName,
       serviceCd: requestedTests.length > 0 ? requestedTests.join(', ') : `DEPT:${effectiveDept}`,
-      status: "Pending Check",
+      status: initialStatus,
       entryDate: formatDateIST(now),
       entryTime: formatTimeIST(now),
       receivedDate: '--',
@@ -1031,6 +1091,14 @@ export default function Dashboard() {
 
     setSamples(prev => [optimisticSample, ...prev.filter(s => s.barcode !== cleanBarcode)]);
 
+    // When Trigger is Disabled (delay === 0):
+    // Call triggerExtensionCheck(barcode) IMMEDIATELY in the scan handler right after row creation!
+    if (delayMins === 0) {
+      triggerExtensionCheck(cleanBarcode, effectiveDept, 0);
+      dispatchedBarcodesRef.current.add(cleanBarcode);
+      checkDispatchedTimeRef.current.set(cleanBarcode, Date.now());
+    }
+
     try {
       const response = await saveBarcodeToDatabase(currentInput, effectiveDept);
       
@@ -1052,6 +1120,10 @@ export default function Dashboard() {
           }
           return s;
         }));
+
+        if (delayMins === 0) {
+          triggerBarcodeCheckServer(response.sample.id, cleanBarcode).catch(() => {});
+        }
 
         await loadRealData();
       } else {
@@ -1263,7 +1335,7 @@ export default function Dashboard() {
   const getStatusClass = (status: string) => {
     const s = (status || '').toLowerCase();
     if (s.includes('checking')) return 'checking';
-    if (s.includes('check failed') || s.includes('failed') || s.includes('offline') || s.includes('not found')) return 'check-failed';
+    if (s.includes('check failed') || s.includes('failed') || s.includes('offline') || s.includes('not found') || s.includes('extension not responding')) return 'check-failed';
     if (s.includes('scanned') || s.includes('pending check') || s.includes('waiting')) return 'pending-check';
     if (s.includes('batch')) return 'batch';
     if (s.includes('collected')) return 'collected';
@@ -1287,8 +1359,8 @@ export default function Dashboard() {
       return 'status-checking';
     }
 
-    // 3. Check failed / extension offline: warning gray, NO danger alert
-    if (s.includes('check failed') || s.includes('failed') || s.includes('offline')) {
+    // 3. Check failed / extension offline / extension not responding: warning gray, NO danger alert
+    if (s.includes('check failed') || s.includes('failed') || s.includes('offline') || s.includes('extension not responding')) {
       return 'status-check-failed';
     }
 
@@ -1299,7 +1371,7 @@ export default function Dashboard() {
       s === 'batch generated' || 
       (s.includes('collected') && !s.includes('uncollected')) || 
       (s.includes('batch') && !s.includes('failed'))
-    ) && !s.includes('pending') && !s.includes('checking') && !s.includes('failed') && !s.includes('received');
+    ) && !s.includes('pending') && !s.includes('checking') && !s.includes('failed') && !s.includes('received') && !s.includes('extension not responding');
 
     if (isCollectedAlert) return 'status-collected';
 
@@ -2302,7 +2374,7 @@ export default function Dashboard() {
                                   whiteSpace: 'nowrap'
                                 }}>
                                   <span style={{ display: 'inline-block', width: '8px', height: '8px', border: '1.5px solid #06b6d4', borderTopColor: 'transparent', borderRadius: '50%', animation: 'spin 1s linear infinite' }}></span>
-                                  <span>In Progress</span>
+                                  <span>{state.formattedTime || 'Checking...'}</span>
                                 </span>
                                 <span style={{
                                   fontSize: '7px',

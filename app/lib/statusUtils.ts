@@ -30,6 +30,10 @@ export function normalizeStatus(
     return 'Checking...';
   }
 
+  if (sLower.includes('extension not responding') || sLower.includes('not responding')) {
+    return 'Extension Not Responding';
+  }
+
   if (sLower.includes('check failed') || sLower.includes('offline') || sLower === 'failed' || sLower.includes('not found')) {
     return 'Check Failed';
   }

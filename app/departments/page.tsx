@@ -78,10 +78,10 @@ export default function DepartmentsPage() {
   const handleEditClick = (dept: Department) => {
     setEditingId(dept.id);
     setNameInput(dept.name);
-    setTriggerTimeInput(dept.triggerTime ? dept.triggerTime.toString() : '');
-    setTriggerTimeEnabled(dept.triggerTime != null);
-    setProvisionalTimeInput(dept.provisionalTime ? dept.provisionalTime.toString() : '');
-    setProvisionalTimeEnabled(dept.provisionalTime != null);
+    setTriggerTimeInput((dept.triggerTime != null && dept.triggerTime > 0) ? dept.triggerTime.toString() : '');
+    setTriggerTimeEnabled(dept.triggerTime != null && dept.triggerTime > 0);
+    setProvisionalTimeInput((dept.provisionalTime != null && dept.provisionalTime > 0) ? dept.provisionalTime.toString() : '');
+    setProvisionalTimeEnabled(dept.provisionalTime != null && dept.provisionalTime > 0);
   };
 
   const handleCancelEdit = () => {

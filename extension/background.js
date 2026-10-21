@@ -18,12 +18,21 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   }
 
   // Handle lookup trigger request from dashboard or content script
-  if (message.action === "SEARCH_BARCODE" || message.action === "TRIGGER_BARCODE_CHECK") {
+  if (message.action === "SEARCH_BARCODE" || message.action === "TRIGGER_BARCODE_CHECK" || message.action === "CHECK_BARCODE_DATA" || message.type === "CHECK_BARCODE_DATA") {
     // Diagnostic log specified in requirements:
     console.log(`[Extension] Received lookup request for barcode: ${message.barcode}. Querying LIS...`);
 
+    if (message.dashboardUrl) {
+      API_URL = `${message.dashboardUrl}/api/extension`;
+      chrome.storage.local.set({ dashboardUrl: message.dashboardUrl });
+    }
+
     // Broadcast SEARCH_BARCODE to all open tabs so the LIS tab searches
     chrome.tabs.query({}, function(tabs) {
+      if (!tabs || tabs.length === 0) {
+        console.warn("[Extension] No open tabs found to receive search request");
+        return;
+      }
       tabs.forEach(tab => {
         if (tab.id) {
           chrome.tabs.sendMessage(tab.id, { 
@@ -76,6 +85,27 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       });
   }
 });
+
+// External messages from dashboard web page (via externally_connectable)
+if (chrome.runtime.onMessageExternal) {
+  chrome.runtime.onMessageExternal.addListener((message, sender, sendResponse) => {
+    if (message && (message.action === "SEARCH_BARCODE" || message.action === "TRIGGER_BARCODE_CHECK" || message.action === "CHECK_BARCODE_DATA" || message.type === "CHECK_BARCODE_DATA")) {
+      console.log(`[Extension] Received external lookup request for barcode: ${message.barcode}. Querying LIS...`);
+      chrome.tabs.query({}, function(tabs) {
+        tabs.forEach(tab => {
+          if (tab.id) {
+            chrome.tabs.sendMessage(tab.id, { 
+              action: "SEARCH_BARCODE", 
+              barcode: message.barcode 
+            }).catch(() => {});
+          }
+        });
+      });
+      if (sendResponse) sendResponse({ success: true, barcode: message.barcode });
+      return true;
+    }
+  });
+}
 
 // Periodic fallback poll: Check for pending barcodes every 10 seconds
 setInterval(() => {

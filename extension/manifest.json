@@ -6,7 +6,8 @@
   "permissions": [
     "storage",
     "activeTab",
-    "scripting"
+    "scripting",
+    "tabs"
   ],
   "host_permissions": [
     "http://localhost:3000/*",
@@ -21,7 +22,17 @@
   "content_scripts": [
     {
       "matches": ["<all_urls>"], 
-      "js": ["content.js"]
+      "js": ["content.js"],
+      "run_at": "document_start"
     }
-  ]
+  ],
+  "externally_connectable": {
+    "matches": [
+      "http://localhost:3000/*",
+      "http://127.0.0.1:3000/*",
+      "https://real-expo.vercel.app/*",
+      "http://*/*",
+      "https://*/*"
+    ]
+  }
 }

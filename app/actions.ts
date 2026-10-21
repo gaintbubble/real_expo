@@ -37,17 +37,16 @@ export async function saveBarcodeToDatabase(barcode: string, activeTab?: string)
       activeDept = depts.find(d => d.name.toLowerCase() === 'haematology') || depts[0];
     }
 
+    // Strict Toggle Evaluation:
+    // If trigger_enabled === false OR trigger_time === 0 (or null):
+    // Set initial delay = 0 minutes. No countdown timer!
+    // Immediately initiate check with status 'Checking...'
+    // Only if trigger_enabled === true and triggerTime > 0, use configured duration.
     let triggerDelayMins = 0;
-    if (activeDept) {
-      if (activeDept.triggerTime != null && activeDept.triggerTime > 0) {
-        triggerDelayMins = activeDept.triggerTime;
-      } else if (activeDept.name.toLowerCase() === 'haematology') {
-        triggerDelayMins = 2;
-      }
-    }
-
-    if (triggerDelayMins <= 0 && effectiveDeptName.toLowerCase() === 'haematology') {
-      triggerDelayMins = 2;
+    if (activeDept && activeDept.triggerTime != null && activeDept.triggerTime > 0) {
+      triggerDelayMins = activeDept.triggerTime;
+    } else {
+      triggerDelayMins = 0;
     }
 
     // Resolve order test configs
@@ -104,29 +103,31 @@ export async function saveBarcodeToDatabase(barcode: string, activeTab?: string)
     const finalTestName = displayTestNames.join(', ');
     const finalServiceCd = serviceCds.length > 0 ? serviceCds.join(', ') : `DEPT:${activeDept ? activeDept.name : effectiveDeptName}`;
 
-    // Delayed Check: The trigger timer strictly gates the analyzer polling / background status check.
-    // Trigger target time is calculated from the exact scan time: barcode_scan_time + department_trigger_time.
-    const nextCheckTime = new Date(scanTime.getTime() + triggerDelayMins * 60000);
+    const nextCheckTime = triggerDelayMins > 0 ? new Date(scanTime.getTime() + triggerDelayMins * 60000) : scanTime;
+    const initialStatus = triggerDelayMins > 0 ? "Pending Check" : "Checking...";
+    const initialTestName = displayTestNames.length > 0 && displayTestNames[0] !== "Resolving..." 
+      ? finalTestName 
+      : (triggerDelayMins > 0 ? "Resolving..." : "Fetching from LIS...");
 
     const sample = await prisma.trackedSample.create({
       data: {
         barcode: cleanBarcode,
-        currentStatus: "Pending Check",                      // Pre-Check state during trigger delay
-        receivedTime: null,                                  // Result Entry SLA starts ONLY when status transitions to Sample Received
+        currentStatus: initialStatus,
+        receivedTime: null,
         resultTime: null,
-        testName: finalTestName,
+        testName: initialTestName,
         patientName: "--",
         serviceCd: finalServiceCd,
         testDetails: JSON.stringify(resolvedTestDetails),
-        createdAt: scanTime,                                 // Exact scan timestamp
-        nextCheckTime: nextCheckTime                        // Gated trigger delay for status check
+        createdAt: scanTime,
+        nextCheckTime: nextCheckTime
       }
     });
 
     await prisma.statusHistory.create({
       data: {
         sampleId: sample.id,
-        status: "Pending Check",
+        status: initialStatus,
         timestamp: scanTime
       }
     });
@@ -204,35 +205,58 @@ export async function getAllTrackedSamples(dateStr?: string) {
     // NEVER inject hardcoded "CBC" or "Sample Collected" dummy data!
     for (const s of samples) {
       let normStatus = normalizeStatus(s.currentStatus, s.barcode, s.testName, s.serviceCd);
-      const isPreCheck = (normStatus === 'Pending Check' || normStatus === 'Checking...' || normStatus === 'Check Failed') && !s.receivedTime;
+      const isPreCheck = (normStatus === 'Pending Check' || normStatus === 'Checking...' || normStatus === 'Check Failed' || normStatus === 'Extension Not Responding') && !s.receivedTime;
 
       if (isPreCheck) {
         const checkTargetMs = s.nextCheckTime ? new Date(s.nextCheckTime).getTime() : 0;
-        const isElapsed = checkTargetMs > 0 && now.getTime() >= checkTargetMs;
+        const isFutureCountdown = checkTargetMs > now.getTime();
 
-        if (isElapsed) {
-          const elapsedSecs = Math.floor((now.getTime() - checkTargetMs) / 1000);
-
-          // If check was explicitly marked failed or has exceeded the 20s extension timeout window:
-          if (normStatus === 'Check Failed' || elapsedSecs >= 20) {
-            normStatus = 'Check Failed';
-            s.currentStatus = 'Check Failed';
-            if (!s.testName || s.testName === 'Resolving...' || s.testName === 'Fetching from LIS...' || s.testName === 'CBC') {
-              s.testName = 'Not Found';
-            }
-          } else {
-            // First 20 seconds after trigger expiry: actively checking against LIS
-            normStatus = 'Checking...';
-            s.currentStatus = 'Checking...';
-            if (!s.testName || s.testName === 'Resolving...' || s.testName === 'CBC') {
-              s.testName = 'Fetching from LIS...';
-            }
-          }
-        } else {
+        if (isFutureCountdown) {
           normStatus = 'Pending Check';
           s.currentStatus = 'Pending Check';
           if (!s.testName || s.testName === 'CBC') {
             s.testName = 'Resolving...';
+          }
+        } else {
+          // Timer has elapsed or trigger was 0 / disabled
+          if (normStatus === 'Check Failed' || normStatus === 'Extension Not Responding') {
+            s.currentStatus = normStatus;
+            if (!s.testName || s.testName === 'Resolving...' || s.testName === 'Fetching from LIS...' || s.testName === 'CBC') {
+              s.testName = 'Not Found';
+            }
+          } else if (normStatus === 'Checking...') {
+            const scanMs = s.createdAt ? new Date(s.createdAt).getTime() : checkTargetMs;
+            const refMs = checkTargetMs > 0 ? checkTargetMs : scanMs;
+            const elapsedSecs = refMs > 0 ? Math.floor((now.getTime() - refMs) / 1000) : 10;
+
+            if (elapsedSecs >= 8) {
+              normStatus = 'Extension Not Responding';
+              s.currentStatus = 'Extension Not Responding';
+              if (!s.testName || s.testName === 'Resolving...' || s.testName === 'Fetching from LIS...' || s.testName === 'CBC') {
+                s.testName = 'Not Found';
+              }
+            } else {
+              s.currentStatus = 'Checking...';
+              if (!s.testName || s.testName === 'Resolving...' || s.testName === 'CBC') {
+                s.testName = 'Fetching from LIS...';
+              }
+            }
+          } else {
+            // Pending Check whose countdown timer has reached 0
+            const elapsedSecs = checkTargetMs > 0 ? Math.floor((now.getTime() - checkTargetMs) / 1000) : 10;
+            if (elapsedSecs >= 8) {
+              normStatus = 'Extension Not Responding';
+              s.currentStatus = 'Extension Not Responding';
+              if (!s.testName || s.testName === 'Resolving...' || s.testName === 'Fetching from LIS...' || s.testName === 'CBC') {
+                s.testName = 'Not Found';
+              }
+            } else {
+              normStatus = 'Checking...';
+              s.currentStatus = 'Checking...';
+              if (!s.testName || s.testName === 'Resolving...' || s.testName === 'CBC') {
+                s.testName = 'Fetching from LIS...';
+              }
+            }
           }
         }
       } else {
@@ -343,16 +367,18 @@ export async function getAllTrackedSamples(dateStr?: string) {
         departments.push('HAEMATOLOGY');
       }
 
-      // Fallback: If minTriggerTime is not set from configs, deduce from nextCheckTime & createdAt
-      if (minTriggerTime === Infinity && s.nextCheckTime && s.createdAt) {
-        const diffMins = Math.round((new Date(s.nextCheckTime).getTime() - new Date(s.createdAt).getTime()) / 60000);
-        if (diffMins > 0) {
-          minTriggerTime = diffMins;
+      // Strict Toggle Evaluation: If minTriggerTime is not set from configs, deduce from department configuration
+      if (minTriggerTime === Infinity) {
+        for (const d of departments) {
+          const deptObj = deptMap.get(d.toLowerCase());
+          if (deptObj?.triggerTime != null && deptObj.triggerTime > 0) {
+            minTriggerTime = deptObj.triggerTime;
+            break;
+          }
         }
-      }
-      if (minTriggerTime === Infinity && departments.some(d => d.toLowerCase() === 'haematology')) {
-        const haemDept = deptMap.get('haematology');
-        minTriggerTime = haemDept?.triggerTime ?? 2;
+        if (minTriggerTime === Infinity) {
+          minTriggerTime = 0;
+        }
       }
 
       return {
@@ -360,7 +386,7 @@ export async function getAllTrackedSamples(dateStr?: string) {
         displayTestName,
         testDetails: JSON.stringify(enhancedTestDetails),
         departments,
-        triggerTime: minTriggerTime === Infinity ? null : minTriggerTime,
+        triggerTime: (minTriggerTime !== Infinity && minTriggerTime > 0) ? minTriggerTime : 0,
         provisionalTime: minProvisionalTime === Infinity ? null : minProvisionalTime,
         intervalTime: minIntervalTime === Infinity ? null : minIntervalTime,
         intervalTimeVerified: minIntervalTimeVerified === Infinity ? null : minIntervalTimeVerified,
@@ -801,6 +827,30 @@ export async function triggerBarcodeCheckServer(id: string, barcode?: string) {
     return { success: true, sample: updated };
   } catch (error) {
     console.error("triggerBarcodeCheckServer error:", error);
+    return { success: false, message: "Database error" };
+  }
+}
+
+export async function markCheckFailed(id: string, barcode?: string, reason: string = "Extension Not Responding") {
+  try {
+    const updated = await prisma.trackedSample.update({
+      where: { id },
+      data: {
+        currentStatus: reason,
+        testName: "Not Found"
+      }
+    });
+
+    await prisma.statusHistory.create({
+      data: {
+        sampleId: id,
+        status: reason
+      }
+    });
+
+    return { success: true, sample: updated };
+  } catch (error) {
+    console.error("markCheckFailed error:", error);
     return { success: false, message: "Database error" };
   }
 }

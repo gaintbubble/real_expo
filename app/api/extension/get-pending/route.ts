@@ -22,10 +22,7 @@ export async function GET() {
             // Only start checking when trigger delay from scan time has elapsed (nextCheckTime <= now).
             OR: [
               { nextCheckTime: { lte: now } },
-              { 
-                nextCheckTime: null,
-                createdAt: { lte: new Date(now.getTime() - 120000) } // Safety: at least 2m past scan time
-              }
+              { nextCheckTime: null }
             ]
           },
           {
@@ -54,6 +51,7 @@ export async function GET() {
       await prisma.trackedSample.update({
         where: { id: s.id },
         data: {
+          currentStatus: 'Checking...',
           nextCheckTime: new Date(Date.now() + 60000)
         }
       });
